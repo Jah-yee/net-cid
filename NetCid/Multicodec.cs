@@ -39,6 +39,7 @@ public static class Multicodec
     public const ulong Ed25519Pub = 0xED;
     public const ulong P256Pub = 0x1200;
     public const ulong P384Pub = 0x1201;
+    public const ulong P521Pub = 0x1202;
 
     private static readonly IReadOnlyDictionary<ulong, string> NamesByCode = new ReadOnlyDictionary<ulong, string>(
         new Dictionary<ulong, string>
@@ -72,7 +73,8 @@ public static class Multicodec
             [X25519Pub] = "x25519-pub",
             [Ed25519Pub] = "ed25519-pub",
             [P256Pub] = "p256-pub",
-            [P384Pub] = "p384-pub"
+            [P384Pub] = "p384-pub",
+            [P521Pub] = "p521-pub"
         });
 
     private static readonly IReadOnlyDictionary<string, ulong> CodesByName = new ReadOnlyDictionary<string, ulong>(

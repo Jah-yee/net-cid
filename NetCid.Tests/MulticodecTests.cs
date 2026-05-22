@@ -10,6 +10,7 @@ public sealed class MulticodecTests
     [InlineData(Multicodec.Ed25519Pub, "ed25519-pub")]
     [InlineData(Multicodec.P256Pub, "p256-pub")]
     [InlineData(Multicodec.P384Pub, "p384-pub")]
+    [InlineData(Multicodec.P521Pub, "p521-pub")]
     public void TryGetName_ReturnsNameForKeyType(ulong code, string expectedName)
     {
         Assert.True(Multicodec.TryGetName(code, out var name));
@@ -24,6 +25,7 @@ public sealed class MulticodecTests
     [InlineData("ed25519-pub", Multicodec.Ed25519Pub)]
     [InlineData("p256-pub", Multicodec.P256Pub)]
     [InlineData("p384-pub", Multicodec.P384Pub)]
+    [InlineData("p521-pub", Multicodec.P521Pub)]
     public void TryGetCode_ReturnsCodeForKeyType(string name, ulong expectedCode)
     {
         Assert.True(Multicodec.TryGetCode(name, out var code));
@@ -59,6 +61,7 @@ public sealed class MulticodecTests
     [InlineData(Multicodec.Ed25519Pub)]
     [InlineData(Multicodec.P256Pub)]
     [InlineData(Multicodec.P384Pub)]
+    [InlineData(Multicodec.P521Pub)]
     public void PrefixDecode_RoundTrip(ulong codec)
     {
         var rawBytes = new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05 };
