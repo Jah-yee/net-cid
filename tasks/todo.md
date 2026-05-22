@@ -350,3 +350,30 @@
 - Added `Cid.FromCanonicalJson(JsonNode?, codec = Raw, hashCode = Sha2_256)` that writes canonical bytes straight into an `ArrayBufferWriter<byte>` and feeds the resulting span to `FromContent`, avoiding an intermediate `byte[]`. The round-trip integration test proves it produces the same `Cid` as the two-step `FromContent(JcsCanonicalizer.Canonicalize(...))` form.
 - v1 type scope deliberately throws `JcsFormatException` for fractional/exponential numbers, `NaN`, `±∞`, oversized integers, and `JsonValueKind.Undefined`. Each exception message is actionable (range hint or follow-up pointer) so a downstream consumer hitting it knows exactly why.
 - Verified locally: full release build clean (0 warnings, 0 errors); 105 unit + 6 integration tests green.
+
+---
+
+# Task: Validate Issue #9 on Current Branch
+
+## Scope
+
+- Compare the current branch against GitHub issue `#9` for JCS canonicalization.
+- Validate the public API, tests, documentation/version notes, and branch verification evidence before deciding whether the issue is addressed.
+
+## Plan
+
+- [ ] Read issue `#9` requirements and current branch state.
+- [ ] Inspect the JCS implementation, CID convenience API, tests, and release notes on this branch.
+- [ ] Run focused verification for the implementation under review.
+- [ ] Record the validation result and any residual gaps in this review section.
+
+## Verification Checklist
+
+- [ ] Inspect `NetCid/JcsCanonicalizer.cs`, `NetCid/JcsFormatException.cs`, and `NetCid/Cid.cs`
+- [ ] Inspect JCS unit and integration tests
+- [ ] Inspect package/version and changelog evidence
+- [ ] Run focused build/test commands for JCS coverage
+
+## Review
+
+- Pending
