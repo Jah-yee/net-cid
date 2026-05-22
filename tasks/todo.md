@@ -412,3 +412,38 @@
 ## Review
 
 - Example bundled into PR #10 per request so reviewers see the user-facing surface alongside the implementation.
+
+---
+
+# Task: Add P-521 (P521Pub = 0x1202) multicodec constant (Issue #11) — COMPLETED
+
+## Scope
+
+- Add the `Multicodec.P521Pub = 0x1202` constant and `"p521-pub"` name mapping so .NET SSI consumers (notably `net-did` PR #66) don't have to redeclare it locally. Purely additive — no breaking change.
+
+## Plan
+
+- [x] Branch `feature/issue-11-p521-multicodec` off `origin/main`.
+- [x] `NetCid/Multicodec.cs`: add `public const ulong P521Pub = 0x1202;` after `P384Pub`, and `[P521Pub] = "p521-pub"` after the `P384Pub` row in `NamesByCode`.
+- [x] `NetCid.Tests/MulticodecTests.cs`: add `Multicodec.P521Pub` rows to the `TryGetName_ReturnsNameForKeyType`, `TryGetCode_ReturnsCodeForKeyType`, and `PrefixDecode_RoundTrip` theories.
+- [x] `NetCid/NetCid.csproj`: bump `<Version>` from `1.4.0` → `1.5.0`.
+- [x] `CHANGELOG.md`: add `## [1.5.0] - 2026-05-22` entry + link footer.
+- [x] Run `dotnet build NetCid.sln -c Release` and `dotnet test` (unit + integration).
+
+## Verification Checklist
+
+- [x] `dotnet build NetCid.sln -c Release --tl:off` — 0 warnings, 0 errors
+- [x] `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --tl:off` — 108/108 (105 prior + 3 new theory rows)
+- [x] `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --tl:off` — 6/6
+- [x] Varint encoding for `0x1202` confirmed `[0x82, 0x24]` via the `PrefixDecode_RoundTrip` theory.
+
+## Branching note
+
+- PR #10 (JCS / 1.4.0) was merged before this task started (commit `b65fb7f`), so this branch off `origin/main` already carries the 1.4.0 changelog entry. No version-bump conflict.
+
+## Review
+
+- Added `P521Pub = 0x1202` in registry order after `P384Pub`, and `"p521-pub"` to `NamesByCode`. No other code paths touched.
+- Theory coverage for `TryGetName`, `TryGetCode`, and `PrefixDecode_RoundTrip` grew by one inline row each — three additional test cases, no new test methods. `PrefixDecode_RoundTrip(Multicodec.P521Pub)` exercises the `[0x82, 0x24]` varint round-trip via the existing `Multicodec.Prefix` / `Multicodec.Decode` path, so no per-codec varint assertion was needed beyond what's already in place.
+- Version bumped 1.4.0 → 1.5.0 with `## [1.5.0] - 2026-05-22` entry referencing #11. Matches the 1.3.0 / 1.4.0 additive-minor precedent.
+- 108/108 unit + 6/6 integration tests pass; build clean (0 warnings, 0 errors).

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Released]
 
+## [1.5.0] - 2026-05-22
+
+### Added
+
+- `Multicodec.P521Pub` (`0x1202`) and the `"p521-pub"` name mapping, completing the NIST P-curve public-key set alongside the existing `P256Pub` / `P384Pub` ([#11](https://github.com/moisesja/net-cid/issues/11))
+
 ## [1.4.0] - 2026-05-21
 
 ### Added
@@ -56,7 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SHA-256 and SHA-512 multihash support
 - Core multicodec constants (raw, dag-pb, dag-cbor, etc.)
 
-[Unreleased]: https://github.com/moisesja/net-cid/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/moisesja/net-cid/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/moisesja/net-cid/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/moisesja/net-cid/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/moisesja/net-cid/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/moisesja/net-cid/compare/v1.2.0...v1.2.1
