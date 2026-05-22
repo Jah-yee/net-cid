@@ -299,3 +299,116 @@
 ## Review
 
 - Pending
+
+---
+
+# Task: Add JCS (RFC 8785) JSON canonicalization (Issue #9) — COMPLETED
+
+## Scope
+
+- Implement JSON Canonicalization Scheme (RFC 8785) so consumers can content-address JSON values with stable byte output and pair naturally with `Cid.FromContent`.
+- Add a `JcsCanonicalizer` static class with three overloads (`JsonNode?`, `JsonElement`, and `JsonNode? + IBufferWriter<byte>`).
+- Add `JcsFormatException : FormatException` for JCS-specific errors.
+- Add `Cid.FromCanonicalJson(JsonNode?, codec, hashCode)` convenience overload that canonicalizes + builds a CID in one call.
+- Bump package version to `1.4.0` and document the addition.
+
+## v1 type-coverage decision (matches the issue's recommendation **b**)
+
+- Supported: objects (sorted-key), arrays (order-preserved), strings (RFC 8785 §3.2.2.2 escapes, raw UTF-8 above U+007F), integer numbers within `[long.MinValue, ulong.MaxValue]`, `true`, `false`, `null`.
+- Throws `JcsFormatException`: fractional / exponential numbers, `NaN`, `±∞`, integers outside `[long.MinValue, ulong.MaxValue]`, `JsonValueKind.Undefined`.
+- Rationale: every consumer named in the issue (wallet audit log, ZCAP-LD `zcap_cid`, VC DataIntegrity proofs over JCS) only needs integers + strings + bools + objects + arrays. ECMAScript-style fractional output is deferred to a follow-up issue.
+
+## Implementation strategy
+
+- `JsonElement` walker is the single source of truth for writing canonical bytes — sorts object keys by `string.CompareOrdinal` (UTF-16 code unit order = JCS §3.2.3), preserves array order, writes numbers from `TryGetInt64` / `TryGetUInt64`, and emits strings via UTF-8 with byte-level escape pass (`\"`, `\\`, `\b`, `\t`, `\n`, `\f`, `\r`, `\u00XX` for U+0000..U+001F). All bytes ≥ 0x80 pass through as raw UTF-8.
+- `JsonNode?` overloads pre-walk to catch NaN/±∞ stored as raw .NET doubles (the System.Text.Json serializer would otherwise throw a generic `JsonException`), then `JsonSerializer.SerializeToDocument` into a `JsonDocument` and delegate to the `JsonElement` walker.
+- `IBufferWriter<byte>` overload writes directly to the writer with `stackalloc`-backed UTF-8 staging for small strings and `ArrayPool<byte>` fallback for large ones, avoiding per-call `byte[]` allocation in hot paths (audit chain verification).
+- `-0` normalises to `0` (parsed as integer by `TryGetInt64`, formatted back via `ToString(CultureInfo.InvariantCulture)`).
+
+## Plan
+
+- [x] Add `NetCid/JcsFormatException.cs`.
+- [x] Add `NetCid/JcsCanonicalizer.cs` with the three public overloads + private walker helpers.
+- [x] Add `Cid.FromCanonicalJson` overload in `NetCid/Cid.cs`.
+- [x] Add `NetCid.Tests/JcsCanonicalizerTests.cs` (30 tests).
+- [x] Add `NetCid.IntegrationTests/JcsCidRoundTripTests.cs` (3 tests).
+- [x] Bump `Version` to `1.4.0` in `NetCid/NetCid.csproj`.
+- [x] Add a `1.4.0` entry in `CHANGELOG.md` referencing issue #9.
+- [x] Add a JCS bullet + usage snippet to README.
+
+## Verification Checklist
+
+- [x] `dotnet build NetCid.sln -c Release --tl:off` — 0 warnings, 0 errors
+- [x] `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build` — 105/105 pass (75 prior + 30 new)
+- [x] `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build` — 6/6 pass (3 prior + 3 new)
+
+## Review
+
+- Implemented `JcsCanonicalizer` with a `JsonElement` walker as the canonical core. `JsonNode` overloads pre-validate raw .NET `NaN`/`±∞` doubles (which `JsonSerializer.SerializeToDocument` otherwise rejects with a generic `JsonException`), then serialize to a `JsonDocument` and delegate to the same walker — keeping one well-tested code path for canonical bytes.
+- Object key sort uses `string.CompareOrdinal` (UTF-16 code unit ordering, identical to RFC 8785 §3.2.3). Integers go through `TryGetInt64`/`TryGetUInt64`, formatted with `InvariantCulture`; this auto-normalises `-0` to `0` and covers the full `[long.MinValue, ulong.MaxValue]` range used by audit chains.
+- String escaper UTF-8-encodes the whole string into a stackalloc / `ArrayPool<byte>` buffer (256-byte cutoff), then byte-walks: only the seven short escapes plus `\u00XX` for bytes `< 0x20` need replacement. Bytes `>= 0x80` (all UTF-8 multi-byte continuations and lead bytes) pass through as raw bytes, which matches JCS §3.2.2.2's requirement that characters above U+007F stay as raw UTF-8 — verified with the `é` and emoji surrogate-pair tests.
+- Added `Cid.FromCanonicalJson(JsonNode?, codec = Raw, hashCode = Sha2_256)` that writes canonical bytes straight into an `ArrayBufferWriter<byte>` and feeds the resulting span to `FromContent`, avoiding an intermediate `byte[]`. The round-trip integration test proves it produces the same `Cid` as the two-step `FromContent(JcsCanonicalizer.Canonicalize(...))` form.
+- v1 type scope deliberately throws `JcsFormatException` for fractional/exponential numbers, `NaN`, `±∞`, oversized integers, and `JsonValueKind.Undefined`. Each exception message is actionable (range hint or follow-up pointer) so a downstream consumer hitting it knows exactly why.
+- Verified locally: full release build clean (0 warnings, 0 errors); 105 unit + 6 integration tests green.
+
+---
+
+# Task: Validate Issue #9 on Current Branch
+
+## Scope
+
+- Compare the current branch against GitHub issue `#9` for JCS canonicalization.
+- Validate the public API, tests, documentation/version notes, and branch verification evidence before deciding whether the issue is addressed.
+
+## Plan
+
+- [x] Read issue `#9` requirements and current branch state.
+- [x] Inspect the JCS implementation, CID convenience API, tests, and release notes on this branch.
+- [x] Run focused verification for the implementation under review.
+- [x] Record the validation result and any residual gaps in this review section.
+
+## Verification Checklist
+
+- [x] Inspect `NetCid/JcsCanonicalizer.cs`, `NetCid/JcsFormatException.cs`, and `NetCid/Cid.cs`
+- [x] Inspect JCS unit and integration tests
+- [x] Inspect package/version and changelog evidence
+- [x] Run focused build/test commands for JCS coverage
+
+## Review
+
+- Verdict: issue `#9` is addressed on `feature/jcs-canonicalization`. The branch adds the requested `JcsCanonicalizer` overloads, `JcsFormatException`, `Cid.FromCanonicalJson`, JCS unit coverage, CID integration coverage, README guidance, changelog entry, and package version bump to `1.4.0`.
+- Scope note: the branch follows issue `#9`'s recommended v1 option for numbers: integer-valued JSON numbers are supported while fractional/exponential IEEE 754 formatting is rejected with `JcsFormatException` and left for a follow-up.
+- Branch state checked: GitHub issue `#9` is still open, while this branch is ahead of `main` with the JCS commit already present.
+- Verification completed:
+  - `dotnet build NetCid/NetCid.csproj -c Release --no-restore --tl:off` succeeded with 0 warnings and 0 errors.
+  - `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~JcsCanonicalizerTests --tl:off` passed 30/30.
+  - `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~JcsCidRoundTripTests --tl:off` passed 3/3.
+  - `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --no-restore --tl:off` passed 105/105.
+  - `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --no-restore --tl:off` passed 6/6.
+- Verification caveat: `dotnet build NetCid.sln -c Release --tl:off` and its `--no-restore` variant stalled in this environment after emitting library output, so those solution-level build attempts were stopped rather than recorded as successful.
+
+---
+
+# Follow-up: JCS example (Issue #9 / PR #10) — COMPLETED
+
+## Scope
+
+- Add a runnable example mirroring the existing `examples/*-interface/` taxonomy so consumers can see the JCS surface end-to-end alongside the other multiformats interfaces.
+
+## Plan
+
+- [x] Add `examples/jcs-interface/JcsInterfaceExample.csproj` + `Program.cs` walking through stable serialization, `Cid.FromCanonicalJson`, two-step canonicalize-then-sign, the `IBufferWriter<byte>` hot path, and the `JcsFormatException` negative cases.
+- [x] Register the project in `NetCid.sln`.
+- [x] Add `jcs-interface` entry to `examples/README.md` and the main `README.md` example list.
+- [x] Verify with `dotnet build` and `dotnet run --no-build` on the new example.
+
+## Verification Checklist
+
+- [x] `dotnet build examples/jcs-interface/JcsInterfaceExample.csproj -c Release --tl:off` — 0 warnings, 0 errors
+- [x] `dotnet build NetCid.sln -c Release --tl:off` — 0 warnings, 0 errors
+- [x] `dotnet run --project examples/jcs-interface/JcsInterfaceExample.csproj -c Release --no-build --tl:off` prints all five sections; the `Cid.FromCanonicalJson` and `IBufferWriter<byte>` paths emit the same CID
+- [x] Full unit/integration suites still pass (105/105 unit, 6/6 integration)
+
+## Review
+
+- Example bundled into PR #10 per request so reviewers see the user-facing surface alongside the implementation.

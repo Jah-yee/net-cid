@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Released]
 
+## [1.4.0] - 2026-05-21
+
+### Added
+
+- `JcsCanonicalizer` — RFC 8785 JSON Canonicalization Scheme (JCS) producing a deterministic UTF-8 serialization of any supported JSON value, with overloads for `JsonNode?`, `JsonElement`, and direct `IBufferWriter<byte>` writes ([#9](https://github.com/moisesja/net-cid/issues/9))
+- `Cid.FromCanonicalJson(JsonNode?, codec, hashCode)` convenience overload that canonicalizes JSON and computes the resulting CID in one call
+- `JcsFormatException` for values JCS cannot represent deterministically (`NaN`, `±infinity`, fractional/exponential numbers in v1, out-of-range integers)
+
+### Notes
+
+- v1 scope covers objects, arrays, strings, integer-valued numbers within `[long.MinValue, ulong.MaxValue]`, booleans, and null. Fractional/IEEE 754 numbers throw `JcsFormatException` and are tracked for a follow-up release.
+
 ## [1.3.0] - 2026-03-15
 
 ### Added
@@ -44,7 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SHA-256 and SHA-512 multihash support
 - Core multicodec constants (raw, dag-pb, dag-cbor, etc.)
 
-[Unreleased]: https://github.com/moisesja/net-cid/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/moisesja/net-cid/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/moisesja/net-cid/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/moisesja/net-cid/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/moisesja/net-cid/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/moisesja/net-cid/compare/v1.1.0...v1.2.0

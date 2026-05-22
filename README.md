@@ -18,6 +18,7 @@
 - Multicodec constants for common CID codecs (`raw`, `dag-pb`, `dag-cbor`, etc.)
 - Multicodec key-type constants (`ed25519-pub`, `p256-pub`, `secp256k1-pub`, etc.)
 - Multicodec prefix/decode API for varint-tagged byte buffers
+- `JcsCanonicalizer` — RFC 8785 JSON Canonicalization Scheme for stable content-addressing of JSON values, and `Cid.FromCanonicalJson` convenience
 
 ## Install
 
@@ -46,6 +47,14 @@ var cid = Cid.FromContent(content, codec: Multicodec.Raw, hashCode: MultihashCod
 // Serialize
 string text = cid.ToString(); // CIDv1 defaults to base32 lower
 byte[] bytes = cid.ToByteArray();
+
+// Content-address a JSON value with stable bytes (JCS / RFC 8785)
+var entry = new System.Text.Json.Nodes.JsonObject
+{
+    ["seq"] = 1,
+    ["op"]  = "wallet.mint_identity",
+};
+var jsonCid = Cid.FromCanonicalJson(entry);
 ```
 
 ## Specification Notes
@@ -91,6 +100,7 @@ Reference examples are available under `examples/` and mirror the `js-multiforma
 - `examples/block-interface`
 - `examples/multibase-interface`
 - `examples/did-key-interface`
+- `examples/jcs-interface`
 
 See `examples/README.md` for run commands.
 

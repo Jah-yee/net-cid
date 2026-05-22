@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Text.Json.Nodes;
+
 namespace NetCid;
 
 /// <summary>
@@ -98,6 +101,25 @@ public sealed class Cid : IEquatable<Cid>
         };
 
         return CreateV1(codec, multihash);
+    }
+
+    /// <summary>
+    /// Canonicalize <paramref name="json"/> per RFC 8785 (JCS) and return the resulting CID.
+    /// Equivalent to <c>Cid.FromContent(JcsCanonicalizer.Canonicalize(json), codec, hashCode)</c>
+    /// but writes canonical bytes directly into a pooled buffer to avoid an intermediate
+    /// <c>byte[]</c> allocation.
+    /// </summary>
+    /// <exception cref="JcsFormatException">
+    /// The JSON value cannot be canonicalized — see <see cref="JcsCanonicalizer"/> for the v1 type scope.
+    /// </exception>
+    public static Cid FromCanonicalJson(
+        JsonNode? json,
+        ulong codec = Multicodec.Raw,
+        ulong hashCode = MultihashCode.Sha2_256)
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        JcsCanonicalizer.Canonicalize(json, writer);
+        return FromContent(writer.WrittenSpan, codec, hashCode);
     }
 
     public static Cid Parse(string value)
