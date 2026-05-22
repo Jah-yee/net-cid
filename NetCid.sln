@@ -35,6 +35,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "did-key-interface", "did-ke
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DidKeyInterfaceExample", "examples\did-key-interface\DidKeyInterfaceExample.csproj", "{EE42C93D-C02E-4EA3-BE69-8FD54E89D299}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JcsInterfaceExample", "examples\jcs-interface\JcsInterfaceExample.csproj", "{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -153,6 +155,18 @@ Global
 		{EE42C93D-C02E-4EA3-BE69-8FD54E89D299}.Release|x64.Build.0 = Release|Any CPU
 		{EE42C93D-C02E-4EA3-BE69-8FD54E89D299}.Release|x86.ActiveCfg = Release|Any CPU
 		{EE42C93D-C02E-4EA3-BE69-8FD54E89D299}.Release|x86.Build.0 = Release|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Debug|x64.Build.0 = Debug|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Debug|x86.Build.0 = Debug|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Release|x64.ActiveCfg = Release|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Release|x64.Build.0 = Release|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Release|x86.ActiveCfg = Release|Any CPU
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -170,5 +184,6 @@ Global
 		{761A3D13-6BF8-475D-A0EC-AFA0122E10C0} = {100B6907-208C-ABD7-B230-CB97AE7445EB}
 		{0B2C1638-03C9-18B3-27EF-35A0821F1F92} = {B36A84DF-456D-A817-6EDD-3EC3E7F6E11F}
 		{EE42C93D-C02E-4EA3-BE69-8FD54E89D299} = {0B2C1638-03C9-18B3-27EF-35A0821F1F92}
+		{B4892D66-7E45-44FA-BB95-0FB8AFC5ED16} = {B36A84DF-456D-A817-6EDD-3EC3E7F6E11F}
 	EndGlobalSection
 EndGlobal

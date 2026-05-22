@@ -362,18 +362,53 @@
 
 ## Plan
 
-- [ ] Read issue `#9` requirements and current branch state.
-- [ ] Inspect the JCS implementation, CID convenience API, tests, and release notes on this branch.
-- [ ] Run focused verification for the implementation under review.
-- [ ] Record the validation result and any residual gaps in this review section.
+- [x] Read issue `#9` requirements and current branch state.
+- [x] Inspect the JCS implementation, CID convenience API, tests, and release notes on this branch.
+- [x] Run focused verification for the implementation under review.
+- [x] Record the validation result and any residual gaps in this review section.
 
 ## Verification Checklist
 
-- [ ] Inspect `NetCid/JcsCanonicalizer.cs`, `NetCid/JcsFormatException.cs`, and `NetCid/Cid.cs`
-- [ ] Inspect JCS unit and integration tests
-- [ ] Inspect package/version and changelog evidence
-- [ ] Run focused build/test commands for JCS coverage
+- [x] Inspect `NetCid/JcsCanonicalizer.cs`, `NetCid/JcsFormatException.cs`, and `NetCid/Cid.cs`
+- [x] Inspect JCS unit and integration tests
+- [x] Inspect package/version and changelog evidence
+- [x] Run focused build/test commands for JCS coverage
 
 ## Review
 
-- Pending
+- Verdict: issue `#9` is addressed on `feature/jcs-canonicalization`. The branch adds the requested `JcsCanonicalizer` overloads, `JcsFormatException`, `Cid.FromCanonicalJson`, JCS unit coverage, CID integration coverage, README guidance, changelog entry, and package version bump to `1.4.0`.
+- Scope note: the branch follows issue `#9`'s recommended v1 option for numbers: integer-valued JSON numbers are supported while fractional/exponential IEEE 754 formatting is rejected with `JcsFormatException` and left for a follow-up.
+- Branch state checked: GitHub issue `#9` is still open, while this branch is ahead of `main` with the JCS commit already present.
+- Verification completed:
+  - `dotnet build NetCid/NetCid.csproj -c Release --no-restore --tl:off` succeeded with 0 warnings and 0 errors.
+  - `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~JcsCanonicalizerTests --tl:off` passed 30/30.
+  - `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~JcsCidRoundTripTests --tl:off` passed 3/3.
+  - `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --no-restore --tl:off` passed 105/105.
+  - `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --no-restore --tl:off` passed 6/6.
+- Verification caveat: `dotnet build NetCid.sln -c Release --tl:off` and its `--no-restore` variant stalled in this environment after emitting library output, so those solution-level build attempts were stopped rather than recorded as successful.
+
+---
+
+# Follow-up: JCS example (Issue #9 / PR #10) — COMPLETED
+
+## Scope
+
+- Add a runnable example mirroring the existing `examples/*-interface/` taxonomy so consumers can see the JCS surface end-to-end alongside the other multiformats interfaces.
+
+## Plan
+
+- [x] Add `examples/jcs-interface/JcsInterfaceExample.csproj` + `Program.cs` walking through stable serialization, `Cid.FromCanonicalJson`, two-step canonicalize-then-sign, the `IBufferWriter<byte>` hot path, and the `JcsFormatException` negative cases.
+- [x] Register the project in `NetCid.sln`.
+- [x] Add `jcs-interface` entry to `examples/README.md` and the main `README.md` example list.
+- [x] Verify with `dotnet build` and `dotnet run --no-build` on the new example.
+
+## Verification Checklist
+
+- [x] `dotnet build examples/jcs-interface/JcsInterfaceExample.csproj -c Release --tl:off` — 0 warnings, 0 errors
+- [x] `dotnet build NetCid.sln -c Release --tl:off` — 0 warnings, 0 errors
+- [x] `dotnet run --project examples/jcs-interface/JcsInterfaceExample.csproj -c Release --no-build --tl:off` prints all five sections; the `Cid.FromCanonicalJson` and `IBufferWriter<byte>` paths emit the same CID
+- [x] Full unit/integration suites still pass (105/105 unit, 6/6 integration)
+
+## Review
+
+- Example bundled into PR #10 per request so reviewers see the user-facing surface alongside the implementation.

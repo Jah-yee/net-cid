@@ -100,6 +100,7 @@ Reference examples are available under `examples/` and mirror the `js-multiforma
 - `examples/block-interface`
 - `examples/multibase-interface`
 - `examples/did-key-interface`
+- `examples/jcs-interface`
 
 See `examples/README.md` for run commands.
 
