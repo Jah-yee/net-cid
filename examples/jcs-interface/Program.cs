@@ -55,8 +55,20 @@ var pooledCid = Cid.FromContent(pooled.WrittenSpan);
 Console.WriteLine($"written: {pooled.WrittenCount} bytes  cid: {pooledCid}");
 Console.WriteLine();
 
-// 5. Negative cases — JCS cannot represent NaN or fractional numbers in v1.
-//    JcsFormatException carries an actionable message.
+// 5. IEEE-754 numbers — RFC 8785 §3.2.2.3 mandates the ECMA-262
+//    Number::toString algorithm for fractional and exponential values.
+//    Real Verifiable Credentials carry money amounts, geo coordinates,
+//    and scores; all of them now canonicalize without losing precision.
+Console.WriteLine("== IEEE-754 numbers (RFC 8785 / ECMA-262) ==");
+foreach (var sample in new[] { "1.5", "0.1", "1e-7", "1e21", "5e-324", "333333333.3333332897" })
+{
+    var canonical = JcsCanonicalizer.Canonicalize(JsonNode.Parse(sample));
+    Console.WriteLine($"{sample,-26} -> {Encoding.UTF8.GetString(canonical)}");
+}
+Console.WriteLine();
+
+// 6. Negative cases — JCS cannot represent NaN or ±infinity (they have no
+//    JSON syntax). JcsFormatException carries an actionable message.
 Console.WriteLine("== Negative cases ==");
 try
 {
@@ -69,9 +81,9 @@ catch (JcsFormatException ex)
 
 try
 {
-    JcsCanonicalizer.Canonicalize(JsonNode.Parse("1.5"));
+    JcsCanonicalizer.Canonicalize(JsonValue.Create(double.PositiveInfinity));
 }
 catch (JcsFormatException ex)
 {
-    Console.WriteLine($"fractional rejected: {ex.Message}");
+    Console.WriteLine($"+infinity rejected:  {ex.Message}");
 }

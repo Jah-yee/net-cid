@@ -447,3 +447,48 @@
 - Theory coverage for `TryGetName`, `TryGetCode`, and `PrefixDecode_RoundTrip` grew by one inline row each — three additional test cases, no new test methods. `PrefixDecode_RoundTrip(Multicodec.P521Pub)` exercises the `[0x82, 0x24]` varint round-trip via the existing `Multicodec.Prefix` / `Multicodec.Decode` path, so no per-codec varint assertion was needed beyond what's already in place.
 - Version bumped 1.4.0 → 1.5.0 with `## [1.5.0] - 2026-05-22` entry referencing #11. Matches the 1.3.0 / 1.4.0 additive-minor precedent.
 - 108/108 unit + 6/6 integration tests pass; build clean (0 warnings, 0 errors).
+
+---
+
+# Task: V1 — Implement full RFC 8785 number serialization in JcsCanonicalizer (Issue #13)
+
+## Scope
+
+- Replace the v1 "fractional/exponential numbers throw" behaviour with full ECMA-262 §6.1.6.1.20 Number::toString output, as required by RFC 8785 §3.2.2.3, so VC-shaped JSON containing fractional/scientific numbers can be canonicalized, signed, and verified.
+
+## Plan
+
+- [ ] Branch `feature/issue-13-rfc8785-numbers` off `origin/main`.
+- [ ] Add `NetCid/EcmaScriptNumber.cs` — internal helper with `ToCanonicalString(double)` that decomposes `double.ToString(InvariantCulture)` into `(s, n, k)` and applies the four ECMA-262 output branches.
+- [ ] `NetCid/JcsCanonicalizer.cs`: route the double path in `WriteNumber` through the new helper; delete the "fractional/exponential not implemented" and "outside the supported range" throws. Refresh `<remarks>` and `<exception>` docs.
+- [ ] `NetCid.Tests/JcsCanonicalizerTests.cs`: remove the four obsolete throw tests; add the 16-row vector theory from issue #13 plus tests for the documented behaviour change, precision loss per spec, negative-zero double, and culture independence.
+- [ ] Add `NetCid.Tests/EcmaScriptNumberTests.cs` (vector table + boundary thresholds + deterministic-seed bit-pattern fuzz).
+- [ ] Add `NetCid.Tests/EcmaScriptNumberConformanceTests.cs` (gzip-streamed conformance check, skips when `NETCID_CONFORMANCE_FILE` is unset).
+- [ ] Add `.github/workflows/jcs-conformance.yml` that downloads + SHA-256-pins cyberphone's `es6testnumbers.txt.gz`, caches it, and runs the conformance test on PRs touching the formatter (plus `workflow_dispatch` + weekly cron).
+- [ ] Bump `NetCid/NetCid.csproj` `<Version>` from `1.5.0` to `1.6.0`.
+- [ ] `CHANGELOG.md`: `## [1.6.0]` entry — `### Added` (full number support, helper, conformance test) + `### Changed` (over-`ulong` literals fitting in double now canonicalize instead of throwing). Resolve the 1.4.0 follow-up note.
+- [ ] `examples/jcs-interface/Program.cs`: replace the "fractional rejected" demo with a positive demo (canonicalize `1.5`, `1e-7`, `1e21`); keep the NaN rejection.
+- [ ] Build + run unit, integration, and culture-independence (`LC_ALL=de_DE.UTF-8`) tests.
+- [ ] Run the example to confirm it prints the positive output.
+
+## Verification Checklist
+
+- [ ] `dotnet build NetCid.sln -c Release --tl:off` — 0 warnings, 0 errors
+- [ ] `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --tl:off`
+- [ ] `LC_ALL=de_DE.UTF-8 dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --tl:off`
+- [ ] `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --tl:off`
+- [ ] `dotnet run --project examples/jcs-interface/JcsInterfaceExample.csproj -c Release --no-build --tl:off`
+- [ ] Manually triggered `jcs-conformance.yml` passes the full ~100M-line set on the PR branch
+
+
+## Review
+
+- **Spec compliance**: RFC 8785 §3.2.2.3 / ECMA-262 §6.1.6.1.20 now implemented. JSON numbers route through an internal `EcmaScriptNumber.ToCanonicalString(double)` helper that decomposes .NET's shortest-round-trip digit string into ECMAScript's `(s, n, k)` triple and emits the four-branch canonical form (lowercase `e`, explicit sign, no zero padding).
+- **Behaviour change**: integer literals with |x| > 2^53 now round to the nearest IEEE-754 double before serialization, as the spec requires. The v1 integer fast paths emitted the literal verbatim, which silently broke determinism for those magnitudes (`Canon("9007199254740993") ≠ Canon("9007199254740993.0")`). Caught by adversarial review; fixed by gating both `TryGetInt64` and `TryGetUInt64` to `|x| ≤ 2^53` and falling through to the helper otherwise.
+- **Verification completed**:
+  - `dotnet build NetCid.sln -c Release -warnaserror --tl:off` — 0 warnings, 0 errors.
+  - `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --no-build --tl:off` — 150/150 passed, 1 skipped (the upstream conformance test, gated by `NETCID_CONFORMANCE_FILE`).
+  - `LC_ALL=de_DE.UTF-8 dotnet test ... --filter "FullyQualifiedName~Canonicalisation_Is_Culture_Independent"` — 1/1, confirming no locale leak.
+  - `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --tl:off` — 6/6.
+  - `dotnet run --project examples/jcs-interface/JcsInterfaceExample.csproj -c Release --no-build --tl:off` — IEEE-754 section prints the issue's vector table (`1.5 → 1.5`, `1e-7 → 1e-7`, `1e21 → 1e+21`, `5e-324 → 5e-324`, `333333333.3333332897 → 333333333.3333333`); NaN and +∞ rejection messages still fire.
+- **Remaining for merge**: trigger `jcs-number-conformance.yml` on the PR branch via `gh workflow run` to confirm the full ~100M-vector cyberphone set passes end-to-end, then commit the observed SHA-256 into `CONFORMANCE_EXPECTED_SHA256` for future runs.
