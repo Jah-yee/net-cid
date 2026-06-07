@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -79,7 +80,7 @@ public sealed class JcsCanonicalizerTests
         Assert.Equal("0", Canon("0"));
         Assert.Equal("1", Canon("1"));
         Assert.Equal("-1", Canon("-1"));
-        Assert.Equal("9007199254740992", Canon("9007199254740992"));  // > 2^53, still a valid long
+        Assert.Equal("9007199254740992", Canon("9007199254740992"));  // 2^53 — last exactly representable integer
     }
 
     [Fact]
@@ -90,10 +91,30 @@ public sealed class JcsCanonicalizerTests
     }
 
     [Fact]
-    public void Large_Positive_Integer_Uses_UInt64()
+    public void Integer_Literal_Above_2_To_53_Rounds_To_Nearest_Double()
     {
-        // Beyond long.MaxValue (9223372036854775807) but within ulong range.
-        Assert.Equal("18446744073709551615", Canon("18446744073709551615"));  // ulong.MaxValue
+        // RFC 8785 §3.2.2.3 requires the JSON number be quantized to a double before
+        // ECMA-262 ToString runs. 2^53 + 1 = 9007199254740993 has no exact double
+        // representation; the nearest double is 2^53 = 9007199254740992.
+        Assert.Equal("9007199254740992", Canon("9007199254740993"));
+    }
+
+    [Fact]
+    public void Integer_Literal_And_Decimal_Form_Of_Same_Value_Canonicalise_Identically()
+    {
+        // Determinism guarantee: an encoder MUST produce identical bytes regardless of
+        // how the source author wrote the literal. "9007199254740993" and
+        // "9007199254740993.0" denote the same value (both round to 2^53 as a double).
+        Assert.Equal(Canon("9007199254740993"), Canon("9007199254740993.0"));
+    }
+
+    [Fact]
+    public void Large_Positive_Integer_Rounds_To_Nearest_Double_Per_Spec()
+    {
+        // ulong.MaxValue (2^64 - 1) is far beyond double precision; the nearest double
+        // is 2^64 = 18446744073709551616, whose ECMA-262 canonical form is
+        // "18446744073709552000" (shortest decimal that round-trips to 2^64).
+        Assert.Equal("18446744073709552000", Canon("18446744073709551615"));
     }
 
     [Fact]
@@ -218,33 +239,81 @@ public sealed class JcsCanonicalizerTests
         Assert.Contains("infinity", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void Fractional_Number_Throws_JcsFormatException_With_Followup_Hint()
+    // RFC 8785 §3.2.2.3 vector table — every row in issue #13's vector table must round-trip.
+    [Theory]
+    [InlineData("0", "0")]
+    [InlineData("-0", "0")]
+    [InlineData("1", "1")]
+    [InlineData("-1", "-1")]
+    [InlineData("1.0", "1")]
+    [InlineData("1.5", "1.5")]
+    [InlineData("0.1", "0.1")]
+    [InlineData("100", "100")]
+    [InlineData("100000000000000000000", "100000000000000000000")]
+    [InlineData("1e21", "1e+21")]
+    [InlineData("1e-6", "0.000001")]
+    [InlineData("1e-7", "1e-7")]
+    [InlineData("5e-324", "5e-324")]
+    [InlineData("1.7976931348623157e308", "1.7976931348623157e+308")]
+    [InlineData("9007199254740992", "9007199254740992")]
+    [InlineData("333333333.3333332897", "333333333.3333333")]
+    public void Number_Vector_Table_From_Issue_13(string input, string expected)
     {
-        var ex = Assert.Throws<JcsFormatException>(() => Canon("1.5"));
-        Assert.Contains("fractional", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(expected, Canon(input));
     }
 
     [Fact]
-    public void Exponential_Number_Throws_JcsFormatException()
+    public void LargeIntegerLiteral_Overflowing_Double_Throws_Infinity()
     {
-        Assert.Throws<JcsFormatException>(() => Canon("1e10"));
+        // A 400-digit literal cannot fit in any IEEE-754 double — parses to +∞.
+        var literal = new string('9', 400);
+        var ex = Assert.Throws<JcsFormatException>(() => Canon(literal));
+        Assert.Contains("infinity", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Integer_Outside_UInt64_Range_Throws_With_Range_Hint()
+    public void LargeIntegerLiteral_Within_Double_Range_Canonicalises_As_IEEE754()
     {
-        // 21 digits > ulong.MaxValue (20 digits).
-        var ex = Assert.Throws<JcsFormatException>(() => Canon("184467440737095516160"));
-        Assert.Contains("range", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // Issue #13 behaviour change: literals beyond ulong.MaxValue but finite as a
+        // double now canonicalise per ECMA-262 instead of throwing "outside range".
+        Assert.Equal("1e+21", Canon("1000000000000000000000"));
     }
 
     [Fact]
-    public void Integer_Below_Int64_Minimum_Throws_With_Range_Hint()
+    public void Precision_Loss_Per_Spec()
     {
-        // long.MinValue is -9223372036854775808; this is one less than that.
-        var ex = Assert.Throws<JcsFormatException>(() => Canon("-9223372036854775809"));
-        Assert.Contains("range", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // 9007199254740993 = 2^53 + 1 cannot be represented exactly as a double; written
+        // with a decimal point, JSON forces the double path and we canonicalise the
+        // actually-stored double (2^53 = 9007199254740992).
+        Assert.Equal("9007199254740992", Canon("9007199254740993.0"));
+    }
+
+    [Fact]
+    public void JsonValue_NegativeZero_Double_Normalises_To_Zero()
+    {
+        // ECMA-262 step 1 collapses both signed zeros to "0" via the IEEE 754 -0.0 == 0.0
+        // identity, regardless of whether the node was built from a JSON literal or a
+        // CLR -0.0.
+        Assert.Equal("0", Canon(JsonValue.Create(-0.0)));
+        Assert.Equal("0", Canon("-0.0"));
+    }
+
+    [Fact]
+    public void Canonicalisation_Is_Culture_Independent()
+    {
+        // de-DE uses ',' as the decimal separator; any culture leak would emit "0,1".
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            Assert.Equal("0.1", Canon("0.1"));
+            Assert.Equal("1.5", Canon("1.5"));
+            Assert.Equal("1e+21", Canon("1e21"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 
     [Fact]

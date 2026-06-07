@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Released]
 
+## [1.6.0] - 2026-06-07
+
+### Added
+
+- Full RFC 8785 §3.2.2.3 / ECMA-262 §6.1.6.1.20 (`Number.prototype.toString`) support in `JcsCanonicalizer` — JSON values containing fractional, exponential, or out-of-`ulong` numbers (monetary amounts, geo coordinates, scores in Verifiable Credentials) now canonicalize, resolving the v1 follow-up tracked from 1.4.0 ([#13](https://github.com/moisesja/net-cid/issues/13))
+- Internal `EcmaScriptNumber.ToCanonicalString(double)` helper implementing the ECMA-262 §6.1.6.1.20 algorithm against .NET's shortest-round-trip digit string
+- `jcs-number-conformance` workflow that downloads and (when `CONFORMANCE_EXPECTED_SHA256` is set) SHA-256-verifies cyberphone's `es6testfile100m.txt.gz` (100M-vector RFC 8785 conformance set) and runs it on PRs that touch the number formatter, plus `workflow_dispatch` and a weekly backstop. The SHA-256 pin is empty at merge time and tracked as a follow-up
+- Deterministic-seed 100k bit-pattern fuzz in `EcmaScriptNumberTests` that runs in every CI build
+
+### Changed
+
+- JSON integer literals with magnitude greater than 2<sup>53</sup> (the largest integer exactly representable as a double) now round to the nearest IEEE-754 double before serialization, as RFC 8785 §3.2.2.3 / ECMA-262 §6.1.6.1.20 require. Previously such literals were either emitted verbatim (when they fit in `long`/`ulong`) or threw `JcsFormatException` "outside the supported range". Concretely:
+  - `"9007199254740993"` (= 2<sup>53</sup>+1) now canonicalizes as `"9007199254740992"` (was `"9007199254740993"`).
+  - `"18446744073709551615"` (`ulong.MaxValue`) now canonicalizes as `"18446744073709552000"` (was `"18446744073709551615"`).
+  - `"1000000000000000000000"` (> `ulong.MaxValue`) now canonicalizes as `"1e+21"` (was a `JcsFormatException`).
+  - The same value written as `9007199254740993` or `9007199254740993.0` now yields identical bytes — the determinism guarantee the v1 fast path silently broke.
+  - Literals so large they parse to `±∞` (e.g. a 400-digit integer) still throw the existing infinity error.
+
 ## [1.5.0] - 2026-05-22
 
 ### Added
@@ -23,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- v1 scope covers objects, arrays, strings, integer-valued numbers within `[long.MinValue, ulong.MaxValue]`, booleans, and null. Fractional/IEEE 754 numbers throw `JcsFormatException` and are tracked for a follow-up release.
+- v1 scope covers objects, arrays, strings, integer-valued numbers within `[long.MinValue, ulong.MaxValue]`, booleans, and null. Fractional/IEEE 754 numbers throw `JcsFormatException` — full support landed in [1.6.0](#160---2026-06-07) ([#13](https://github.com/moisesja/net-cid/issues/13)).
 
 ## [1.3.0] - 2026-03-15
 
@@ -62,7 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SHA-256 and SHA-512 multihash support
 - Core multicodec constants (raw, dag-pb, dag-cbor, etc.)
 
-[Unreleased]: https://github.com/moisesja/net-cid/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/moisesja/net-cid/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/moisesja/net-cid/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/moisesja/net-cid/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/moisesja/net-cid/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/moisesja/net-cid/compare/v1.2.1...v1.3.0

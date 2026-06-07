@@ -15,10 +15,9 @@ namespace NetCid;
 /// </summary>
 /// <remarks>
 /// <para>
-/// v1 scope (matches issue #9): supports objects, arrays, strings, integer-valued numbers
-/// in <c>[long.MinValue, ulong.MaxValue]</c>, <c>true</c>, <c>false</c>, and <c>null</c>.
-/// Fractional / exponential numbers, <c>NaN</c>, and <c>±infinity</c> throw
-/// <see cref="JcsFormatException"/>.
+/// Supports objects, arrays, strings, IEEE-754 double-precision numbers (per ECMA-262
+/// §6.1.6.1.20, as RFC 8785 §3.2.2.3 requires), <c>true</c>, <c>false</c>, and <c>null</c>.
+/// <c>NaN</c> and <c>±infinity</c> throw <see cref="JcsFormatException"/>.
 /// </para>
 /// <para>Thread-safe — all members are static and stateless.</para>
 /// </remarks>
@@ -32,9 +31,8 @@ public static class JcsCanonicalizer
     /// </summary>
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="JcsFormatException">
-    /// The node contains a value JCS cannot represent deterministically — for example,
-    /// <c>NaN</c>, <c>±infinity</c>, a fractional number (not supported in v1), or an integer
-    /// outside <c>[long.MinValue, ulong.MaxValue]</c>.
+    /// The node contains a value JCS cannot represent deterministically — <c>NaN</c>
+    /// or <c>±infinity</c>.
     /// </exception>
     public static byte[] Canonicalize(JsonNode? node)
     {
@@ -237,44 +235,35 @@ public static class JcsCanonicalizer
         WriteByte(writer, (byte)']');
     }
 
+    // RFC 8785 §3.2.2.3 requires every JSON number be quantized to an IEEE-754
+    // double before ECMA-262 §6.1.6.1.20 (Number::toString) runs. Integer literals
+    // with |x| ≤ 2^53 are exactly representable as doubles, so writing the integer
+    // text directly produces the same bytes as the full helper without a float
+    // round-trip. Above that boundary the integer text and the rounded double's
+    // canonical form diverge — e.g. `9007199254740993` rounds to `9007199254740992`
+    // — so we MUST fall through to the helper to keep two encoders byte-identical.
+    private const long MaxSafeInteger = 9007199254740992L;
+    private const ulong MaxSafeIntegerUnsigned = 9007199254740992UL;
+
     private static void WriteNumber(JsonElement num, IBufferWriter<byte> writer)
     {
-        // Signed first: catches negatives. -0 collapses to 0 via long.ToString.
-        if (num.TryGetInt64(out var l))
+        if (num.TryGetInt64(out var l) && l >= -MaxSafeInteger && l <= MaxSafeInteger)
         {
             WriteAscii(writer, l.ToString(CultureInfo.InvariantCulture));
             return;
         }
 
-        if (num.TryGetUInt64(out var ul))
+        if (num.TryGetUInt64(out var ul) && ul <= MaxSafeIntegerUnsigned)
         {
             WriteAscii(writer, ul.ToString(CultureInfo.InvariantCulture));
             return;
         }
 
-        // NaN/±infinity can only appear here if a custom JsonReaderOptions allowed them.
-        if (num.TryGetDouble(out var d))
-        {
-            if (double.IsNaN(d))
-            {
-                throw new JcsFormatException("JCS cannot represent NaN (RFC 8785 §3.2.2.3).");
-            }
-            if (double.IsInfinity(d))
-            {
-                throw new JcsFormatException("JCS cannot represent ±infinity (RFC 8785 §3.2.2.3).");
-            }
-        }
-
-        var raw = num.GetRawText();
-        if (raw.AsSpan().IndexOfAny('.', 'e', 'E') >= 0)
-        {
-            throw new JcsFormatException(
-                "JCS canonicalization of fractional or exponential numbers is not implemented in this version of NetCid. "
-                + "Use integer-valued numbers within [long.MinValue, ulong.MaxValue], or open a follow-up issue if you need IEEE 754 support.");
-        }
-
-        throw new JcsFormatException(
-            $"Integer '{raw}' is outside the supported range [long.MinValue, ulong.MaxValue].");
+        // Anything else — fractional, exponential, or an integer beyond ±2^53 — goes
+        // through the IEEE-754 path. Integer literals so large they parse to ±∞ trip
+        // the helper's defensive infinity check and throw with the documented message.
+        var d = num.GetDouble();
+        WriteAscii(writer, EcmaScriptNumber.ToCanonicalString(d));
     }
 
     private static void WriteString(string value, IBufferWriter<byte> writer)
