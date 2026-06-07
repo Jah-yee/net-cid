@@ -51,6 +51,7 @@ The library also serves as a shared foundation for higher-level protocols that d
 | `MultihashCode` | `NetCid/MultihashCode.cs` | Constants for hash function identifiers (SHA-256 = `0x12`, SHA-512 = `0x13`, etc.). |
 | `MultihashDigest` | `NetCid/MultihashDigest.cs` | Immutable model representing a multihash: `[varint(code)][varint(digestLength)][digest]`. Provides `Sha2_256()` and `Sha2_512()` factory methods. |
 | `Multicodec` | `NetCid/Multicodec.cs` | Constants for content-type codecs (dag-pb, raw, etc.) and key-type codecs (ed25519-pub, p256-pub, etc.). Bidirectional name/code lookup table. `Prefix()` / `Decode()` / `TryDecode()` API for varint-tagging arbitrary byte buffers. |
+| `Multikey` | `NetCid/Multikey.cs` | W3C Controlled Identifiers Multikey / `did:key` `publicKeyMultibase` helpers. `Encode()` / `Decode()` / `TryDecode()` compose `Multicodec.Prefix` + `Multibase` (base58btc, strict) and add per-codec raw-key-length validation for the eight supported public-key codecs. |
 | `MultibaseEncoding` | `NetCid/MultibaseEncoding.cs` | Enum of supported base encodings. |
 | `Multibase` | `NetCid/Multibase.cs` | Encodes byte arrays to multibase-prefixed strings and decodes them back. Supports base32, base36, base58btc, and base64url. Auto-detects encoding from the single-character prefix on decode. |
 | `CidVersion` | `NetCid/CidVersion.cs` | Enum: `V0`, `V1`. |
@@ -106,6 +107,11 @@ Multibase.Encode(prefixed, Base58Btc) ← "z" + base58btc-encoded
     ▼
 "did:key:z..."                        ← full did:key identifier
 ```
+
+`Multikey.Encode(Ed25519Pub, rawKey)` is the one-call equivalent of the
+two middle steps — it also validates the codec is one of the eight
+supported key types and that `rawKey.Length` matches that codec, so DID
+consumers get a single API instead of hand-assembling the prefix.
 
 ## Design Decisions
 

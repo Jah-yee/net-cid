@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Multikey` static class (`Encode` / `Decode` / `TryDecode`) implementing the W3C Controlled Identifiers 1.0 Multikey verification method and `did:key` `publicKeyMultibase` encoding: `base58btc( varint(keyCodec) ‖ rawPublicKey )`. Validates that the codec is one of the eight supported key-type multicodecs (`ed25519-pub`, `x25519-pub`, `secp256k1-pub`, `p256-pub`, `p384-pub`, `p521-pub`, `bls12_381-g1-pub`, `bls12_381-g2-pub`) and that the raw key length matches that codec; rejects non-base58btc multibases and content-type codecs ([#14](https://github.com/moisesja/net-cid/issues/14))
 - Full RFC 8785 §3.2.2.3 / ECMA-262 §6.1.6.1.20 (`Number.prototype.toString`) support in `JcsCanonicalizer` — JSON values containing fractional, exponential, or out-of-`ulong` numbers (monetary amounts, geo coordinates, scores in Verifiable Credentials) now canonicalize, resolving the v1 follow-up tracked from 1.4.0 ([#13](https://github.com/moisesja/net-cid/issues/13))
 - Internal `EcmaScriptNumber.ToCanonicalString(double)` helper implementing the ECMA-262 §6.1.6.1.20 algorithm against .NET's shortest-round-trip digit string
 - `jcs-number-conformance` workflow that downloads and (when `CONFORMANCE_EXPECTED_SHA256` is set) SHA-256-verifies cyberphone's `es6testfile100m.txt.gz` (100M-vector RFC 8785 conformance set) and runs it on PRs that touch the number formatter, plus `workflow_dispatch` and a weekly backstop. The SHA-256 pin is empty at merge time and tracked as a follow-up
