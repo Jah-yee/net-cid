@@ -36,11 +36,11 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
 
       - name: Build
         run: |
-          dotnet restore NetCid.sln --tl:off
+          dotnet restore NetCid.sln --locked-mode --tl:off
           dotnet build NetCid.sln -c Release --no-restore --tl:off
 
       - name: Perform CodeQL Analysis
