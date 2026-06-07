@@ -53,8 +53,10 @@ public sealed class MultikeyTests
     [Fact]
     public void Encode_Throws_OnContentCodecDagPb()
     {
-        Assert.Throws<ArgumentException>(
+        var ex = Assert.Throws<ArgumentException>(
             () => Multikey.Encode(Multicodec.DagPb, new byte[32]));
+
+        Assert.Equal("keyCodec", ex.ParamName);
     }
 
     [Theory]
@@ -136,9 +138,9 @@ public sealed class MultikeyTests
     }
 
     [Fact]
-    public void Decode_KnownEd25519Vector_RoundTripsTo32ByteKey()
+    public void Decode_DeterministicEd25519Key_RoundTrips()
     {
-        // Self-contained known vector: deterministic 32-byte raw key encoded with the new API,
+        // Deterministic 32-byte raw key (bytes 0..31) encoded with the new API,
         // decoded with TryDecode, then asserted byte-equal. Catches any prefix-handling regression.
         var rawKey = new byte[32];
         for (var i = 0; i < rawKey.Length; i++)
