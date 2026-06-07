@@ -15,8 +15,33 @@ This file provides instructions for AI agents and human contributors working in 
 
 - Use subagents liberally to keep main context window clean
 - Offload research, exploration, and parallel analysis to subagents
+- Always use adverserial agents to attempt to exploit the code that is being generated. The adverserial agents must report in detail about any findings
 - For complex problems, throw more compute at it via subagents
 - One task per subagent for focused execution
+
+### 2a. Workflow Orchestration (Multi-Agent)
+
+- **Opt-in only**: launch a Workflow ONLY when the user explicitly asks (says
+  "workflow", "fan out", "orchestrate with subagents") or runs a skill that
+  calls it. Otherwise use a single subagent, or describe the workflow and its
+  rough token cost and let the user decide. Never auto-launch — workflows can
+  spawn dozens of agents and consume a large token budget.
+- **High-value workflows in this repo**:
+  - _Security review_ — fan out review dimensions (chain validation, caveat
+    inheritance, attenuation, replay/nonce, revocation), then spawn N skeptics
+    per finding to refute it; keep only findings that survive a majority vote.
+  - _Spec-compliance sweep_ — one agent per normative requirement cluster →
+    verify implementation + `tests/Compliance/` coverage → completeness critic
+    flags untested MUST/SHOULD.
+  - _Cross-package migration_ — discover call sites across Core / AspNetCore /
+    examples / tests → transform each in worktree isolation → verify it builds.
+  - _Test-gap analysis_ — multi-modal sweep by requirement, public API surface,
+    and error path.
+- **Default to `pipeline()` over barriers**: verify each finding as its review
+  lands; only use a barrier when a stage genuinely needs all prior results
+  (e.g. dedup before expensive verification).
+- **Always adversarially verify security findings** — a plausible-but-wrong
+  auth-bypass claim is worse than none.
 
 ### 3. Self-Improvement Loop
 
@@ -52,8 +77,9 @@ This file provides instructions for AI agents and human contributors working in 
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to 'tasks/todo.m,
+5. **Document Results**: Add review section to 'tasks/todo{timestamp}.md
 6. **Capture Lessons**: Update 'tasks/lessons.md' after corrections
+7. **Update Documents and Examples**: Always keep any relevant documentation and examples current with your code changes
 
 ## Core Principles
 
