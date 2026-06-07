@@ -40,7 +40,7 @@ jobs:
 
       - name: Build
         run: |
-          dotnet restore NetCid.sln --tl:off
+          dotnet restore NetCid.sln --locked-mode --tl:off
           dotnet build NetCid.sln -c Release --no-restore --tl:off
 
       - name: Perform CodeQL Analysis

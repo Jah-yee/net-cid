@@ -24,7 +24,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore
-        run: dotnet restore NetCid.sln --tl:off
+        run: dotnet restore NetCid.sln --locked-mode --tl:off
 
       - name: Build
         run: dotnet build NetCid.sln -c Release --no-restore --tl:off
