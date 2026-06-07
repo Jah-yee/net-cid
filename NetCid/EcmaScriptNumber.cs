@@ -43,7 +43,7 @@ internal static class EcmaScriptNumber
 
         Decompose(raw, out var digits, out var n);
 
-        var body = Format(digits, digits.Length, n);
+        var body = Format(digits, n);
         return negative ? "-" + body : body;
     }
 
@@ -99,8 +99,10 @@ internal static class EcmaScriptNumber
         n = digits.Length + ePart - fracPart.Length + trail;
     }
 
-    private static string Format(string digits, int k, int n)
+    private static string Format(string digits, int n)
     {
+        var k = digits.Length;
+
         // ECMA-262 §6.1.6.1.20 step 5.
         if (k <= n && n <= 21)
         {

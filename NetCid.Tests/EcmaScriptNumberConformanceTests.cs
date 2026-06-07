@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.IO.Compression;
 
 namespace NetCid.Tests;
@@ -11,7 +10,7 @@ namespace NetCid.Tests;
 /// <remarks>
 /// Reads the file path from the <c>NETCID_CONFORMANCE_FILE</c> environment variable
 /// (the .github/workflows/jcs-conformance.yml job sets it to a cached, SHA-256-pinned
-/// copy of <c>es6testnumbers.txt.gz</c>). When the variable is unset (local
+/// copy of <c>es6testfile100m.txt.gz</c>). When the variable is unset (local
 /// developer runs, the standard CI job), the test skips with a clear message rather
 /// than failing.
 /// </remarks>
@@ -28,7 +27,7 @@ public sealed class EcmaScriptNumberConformanceTests
         {
             Assert.Skip(
                 $"Set {EnvVar} to the path of cyberphone/json-canonicalization's " +
-                "testdata/numbers/es6testnumbers.txt.gz to run the conformance suite. " +
+                "es6testfile100m.txt.gz release asset to run the conformance suite. " +
                 "The jcs-conformance GitHub Actions workflow does this automatically.");
             return;
         }

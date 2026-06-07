@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Full RFC 8785 §3.2.2.3 / ECMA-262 §6.1.6.1.20 (`Number.prototype.toString`) support in `JcsCanonicalizer` — JSON values containing fractional, exponential, or out-of-`ulong` numbers (monetary amounts, geo coordinates, scores in Verifiable Credentials) now canonicalize, resolving the v1 follow-up tracked from 1.4.0 ([#13](https://github.com/moisesja/net-cid/issues/13))
 - Internal `EcmaScriptNumber.ToCanonicalString(double)` helper implementing the ECMA-262 §6.1.6.1.20 algorithm against .NET's shortest-round-trip digit string
-- `jcs-number-conformance` workflow that downloads and SHA-256-pins cyberphone's `es6testfile100m.txt.gz` (100M-vector RFC 8785 conformance set) and runs it on PRs that touch the number formatter, plus `workflow_dispatch` and a weekly backstop
+- `jcs-number-conformance` workflow that downloads and (when `CONFORMANCE_EXPECTED_SHA256` is set) SHA-256-verifies cyberphone's `es6testfile100m.txt.gz` (100M-vector RFC 8785 conformance set) and runs it on PRs that touch the number formatter, plus `workflow_dispatch` and a weekly backstop. The SHA-256 pin is empty at merge time and tracked as a follow-up
 - Deterministic-seed 100k bit-pattern fuzz in `EcmaScriptNumberTests` that runs in every CI build
 
 ### Changed
@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- v1 scope covers objects, arrays, strings, integer-valued numbers within `[long.MinValue, ulong.MaxValue]`, booleans, and null. Fractional/IEEE 754 numbers throw `JcsFormatException` — full support landed in [1.6.0](#160---2026-06-06) ([#13](https://github.com/moisesja/net-cid/issues/13)).
+- v1 scope covers objects, arrays, strings, integer-valued numbers within `[long.MinValue, ulong.MaxValue]`, booleans, and null. Fractional/IEEE 754 numbers throw `JcsFormatException` — full support landed in [1.6.0](#160---2026-06-07) ([#13](https://github.com/moisesja/net-cid/issues/13)).
 
 ## [1.3.0] - 2026-03-15
 
