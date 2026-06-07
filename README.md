@@ -18,7 +18,10 @@
 - Multicodec constants for common CID codecs (`raw`, `dag-pb`, `dag-cbor`, etc.)
 - Multicodec key-type constants (`ed25519-pub`, `p256-pub`, `secp256k1-pub`, etc.)
 - Multicodec prefix/decode API for varint-tagged byte buffers
+- `Multikey` — encode/decode W3C Controlled Identifiers `publicKeyMultibase` (base58btc(varint(keyCodec) ‖ rawKey)) with per-codec key-length validation; one call replaces the manual `Multicodec.Prefix` + `Multibase.Encode` dance for `did:key` construction
 - `JcsCanonicalizer` — RFC 8785 JSON Canonicalization Scheme for stable content-addressing of JSON values, and `Cid.FromCanonicalJson` convenience
+
+For the full list of specifications this library implements, the version/reference each targets, the governing body, and that specification's standardization status, see [`net-cid-implemented-specs.md`](net-cid-implemented-specs.md).
 
 ## Install
 

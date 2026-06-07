@@ -15,7 +15,7 @@
 
 - **Multibase, Multicodec, and Multihash are implemented as CID-focused subsets** of their full registries, by design. `NetCid` covers the encodings, codecs, and hash functions needed for content addressing and decentralized-identity key encoding, not every entry in the upstream tables.
 - **Multihash hashing helpers** are provided for SHA-256 and SHA-512. The multihash wire format itself round-trips any function code; only these two have built-in digest computation.
-- **JCS number support is currently limited to integers** in `[long.MinValue, ulong.MaxValue]`; fractional and exponential numbers throw `JcsFormatException`. Full RFC 8785 (ECMAScript) number serialization is planned for a future release.
+- **JCS number support is RFC 8785-complete** as of 1.6.0: integers, fractional values, scientific notation, and integers beyond ±2<sup>53</sup> all canonicalize via the ECMA-262 §6.1.6.1.20 (`Number.prototype.toString`) algorithm required by RFC 8785 §3.2.2.3. The only numeric values that still throw `JcsFormatException` are `NaN` and `±∞`, which the spec forbids.
 - **CID versions 2 and 3 are rejected as reserved**, per the CID specification.
 - The **key-type multicodecs** identify public keys whose formats are defined elsewhere (Ed25519/X25519: RFC 8032 / RFC 7748; NIST P-curves: FIPS 186; secp256k1: SEC 2; BLS12-381: IRTF CFRG work). `NetCid` encodes their multicodec tags; it does not implement those cryptographic specifications.
 
@@ -28,4 +28,4 @@
 - Unsigned Varint — https://github.com/multiformats/unsigned-varint
 - JCS — https://www.rfc-editor.org/rfc/rfc8785
 
-_Last reviewed: 2026-06-06._
+_Last reviewed: 2026-06-07._
