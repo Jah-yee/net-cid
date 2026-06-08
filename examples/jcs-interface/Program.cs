@@ -68,8 +68,10 @@ foreach (var sample in new[] { "1.5", "0.1", "1e-7", "1e21", "5e-324", "33333333
 Console.WriteLine();
 
 // 6. Negative cases — JCS cannot represent NaN or ±infinity (they have no
-//    JSON syntax), and it rejects duplicate object member names (RFC 8785 builds on
-//    I-JSON / RFC 7493, which forbids them). JcsFormatException carries an actionable message.
+//    JSON syntax), it rejects duplicate object member names (RFC 8785 builds on
+//    I-JSON / RFC 7493, which forbids them), and it rejects strings with invalid UTF-16
+//    (unpaired surrogates) rather than silently substituting U+FFFD. JcsFormatException
+//    carries an actionable message.
 Console.WriteLine("== Negative cases ==");
 try
 {
@@ -98,4 +100,16 @@ try
 catch (JcsFormatException ex)
 {
     Console.WriteLine($"duplicate key rejected: {ex.Message}");
+}
+
+try
+{
+    // An unpaired surrogate has no UTF-8 representation; rather than let System.Text.Json
+    // silently rewrite it to U+FFFD (which would let two distinct malformed inputs collapse
+    // to the same canonical bytes), JcsCanonicalizer rejects it.
+    JcsCanonicalizer.Canonicalize(JsonValue.Create("\uD800"));
+}
+catch (JcsFormatException ex)
+{
+    Console.WriteLine($"unpaired surrogate rejected: {ex.Message}");
 }

@@ -80,7 +80,7 @@ Parsing APIs enforce default size limits to reduce memory-pressure risk from unt
 
 Overloads on parse/decode methods let callers provide custom limits when needed.
 
-`JcsCanonicalizer` additionally caps JSON nesting depth at 64 levels, throwing `JcsFormatException` on deeper input rather than overflowing the stack on hostile, deeply nested JSON, and caps the canonical output at `DefaultMaxOutputByteLength` (1 MiB) — raise it per call via the `maxOutputBytes` overloads. It also rejects JSON objects with duplicate member names (RFC 8785 builds on I-JSON / RFC 7493, which forbids them), throwing `JcsFormatException` rather than emitting ambiguous, non-canonical output.
+`JcsCanonicalizer` additionally caps JSON nesting depth at 64 levels, throwing `JcsFormatException` on deeper input rather than overflowing the stack on hostile, deeply nested JSON, and caps the canonical output at `DefaultMaxOutputByteLength` (1 MiB) — raise it per call via the `maxOutputBytes` overloads. It also rejects JSON objects with duplicate member names (RFC 8785 builds on I-JSON / RFC 7493, which forbids them), throwing `JcsFormatException` rather than emitting ambiguous, non-canonical output. Strings and member names must be well-formed UTF-16: an unpaired surrogate throws `JcsFormatException` rather than being silently replaced with U+FFFD (which would let two distinct malformed inputs collapse to the same canonical bytes).
 
 References:
 
