@@ -19,11 +19,41 @@ namespace NetCid;
 /// §6.1.6.1.20, as RFC 8785 §3.2.2.3 requires), <c>true</c>, <c>false</c>, and <c>null</c>.
 /// <c>NaN</c> and <c>±infinity</c> throw <see cref="JcsFormatException"/>.
 /// </para>
+/// <para>
+/// JSON nested deeper than 64 levels throws <see cref="JcsFormatException"/> rather than
+/// overflowing the stack. Because JCS processes untrusted credential JSON, the unbounded
+/// recursion that would otherwise occur is a denial-of-service vector: a
+/// <see cref="StackOverflowException"/> cannot be caught in .NET and terminates the process.
+/// </para>
 /// <para>Thread-safe — all members are static and stateless.</para>
 /// </remarks>
 public static class JcsCanonicalizer
 {
+    /// <summary>
+    /// Default maximum size, in bytes, of the canonical UTF-8 output. Canonicalization that
+    /// would produce more than this throws <see cref="JcsFormatException"/>. This is a
+    /// defense-in-depth bound for applications canonicalizing untrusted JSON, mirroring the
+    /// input limits on the CID/Multibase parse paths (<c>1 MiB</c>). Callers processing
+    /// known-safe, larger documents can raise it via the <c>maxOutputBytes</c> overloads.
+    /// </summary>
+    public const int DefaultMaxOutputByteLength = 1_048_576;
+
     private const int StackBufferThreshold = 256;
+
+    /// <summary>
+    /// Maximum JSON nesting depth accepted during canonicalization. Matches the default
+    /// <see cref="JsonSerializerOptions.MaxDepth"/> of 64. Input nested deeper than this
+    /// throws <see cref="JcsFormatException"/> instead of overflowing the stack.
+    /// </summary>
+    private const int MaxDepth = 64;
+
+    // Make our depth guard the single source of truth: validation already rejects anything
+    // past MaxDepth, so the serializer only ever sees depth ≤ MaxDepth. The +1 of headroom
+    // guarantees a value at exactly MaxDepth is never rejected by System.Text.Json's own
+    // default depth limit with a different (non-JcsFormatException) error. MaxDepth is the
+    // only changed option, so the produced document — and thus the canonical bytes — is
+    // identical to the default-options serialization.
+    private static readonly JsonSerializerOptions SerializeOptions = new() { MaxDepth = MaxDepth + 1 };
 
     /// <summary>
     /// Canonicalize <paramref name="node"/> per RFC 8785. A <see langword="null"/>
@@ -32,12 +62,27 @@ public static class JcsCanonicalizer
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="JcsFormatException">
     /// The node contains a value JCS cannot represent deterministically — <c>NaN</c>
-    /// or <c>±infinity</c>.
+    /// or <c>±infinity</c> — nests deeper than the supported limit of 64 levels, or
+    /// canonicalizes to more than <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonNode? node)
+        => Canonicalize(node, DefaultMaxOutputByteLength);
+
+    /// <summary>
+    /// Canonicalize <paramref name="node"/> per RFC 8785, rejecting output larger than
+    /// <paramref name="maxOutputBytes"/>.
+    /// </summary>
+    /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
+    /// <exception cref="JcsFormatException">
+    /// The node contains a value JCS cannot represent deterministically, nests deeper than
+    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// <paramref name="maxOutputBytes"/> bytes.
+    /// </exception>
+    public static byte[] Canonicalize(JsonNode? node, int maxOutputBytes)
     {
         var writer = new ArrayBufferWriter<byte>();
-        Canonicalize(node, writer);
+        Canonicalize(node, writer, maxOutputBytes);
         return writer.WrittenSpan.ToArray();
     }
 
@@ -46,12 +91,30 @@ public static class JcsCanonicalizer
     /// </summary>
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="JcsFormatException">
-    /// The element contains a value JCS cannot represent deterministically.
+    /// The element contains a value JCS cannot represent deterministically, nests deeper than
+    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonElement element)
+        => Canonicalize(element, DefaultMaxOutputByteLength);
+
+    /// <summary>
+    /// Canonicalize a <see cref="JsonElement"/> per RFC 8785, rejecting output larger than
+    /// <paramref name="maxOutputBytes"/>.
+    /// </summary>
+    /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
+    /// <exception cref="JcsFormatException">
+    /// The element contains a value JCS cannot represent deterministically, nests deeper than
+    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// <paramref name="maxOutputBytes"/> bytes.
+    /// </exception>
+    public static byte[] Canonicalize(JsonElement element, int maxOutputBytes)
     {
+        ValidateOutputLimit(maxOutputBytes);
+
         var writer = new ArrayBufferWriter<byte>();
-        WriteElement(element, writer);
+        WriteElement(element, new LimitedBufferWriter(writer, maxOutputBytes), 0);
         return writer.WrittenSpan.ToArray();
     }
 
@@ -62,27 +125,50 @@ public static class JcsCanonicalizer
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="destination"/> is <see langword="null"/>.</exception>
     /// <exception cref="JcsFormatException">
-    /// The node contains a value JCS cannot represent deterministically.
+    /// The node contains a value JCS cannot represent deterministically, nests deeper than
+    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static void Canonicalize(JsonNode? node, IBufferWriter<byte> destination)
+        => Canonicalize(node, destination, DefaultMaxOutputByteLength);
+
+    /// <summary>
+    /// Canonicalize <paramref name="node"/> into <paramref name="destination"/>, rejecting
+    /// output larger than <paramref name="maxOutputBytes"/>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="destination"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
+    /// <exception cref="JcsFormatException">
+    /// The node contains a value JCS cannot represent deterministically, nests deeper than
+    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// <paramref name="maxOutputBytes"/> bytes.
+    /// </exception>
+    public static void Canonicalize(JsonNode? node, IBufferWriter<byte> destination, int maxOutputBytes)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        ValidateOutputLimit(maxOutputBytes);
+
+        // Enforce the output cap at the single choke point through which every byte is
+        // committed; the wrapper throws before the byte that would cross the limit is counted.
+        var writer = new LimitedBufferWriter(destination, maxOutputBytes);
 
         if (node is null)
         {
-            WriteRaw(destination, "null"u8);
+            WriteRaw(writer, "null"u8);
             return;
         }
 
         // JsonNode may wrap raw .NET doubles/floats holding NaN/±infinity. The default
         // System.Text.Json serializer would throw a generic JsonException; surface a
         // JCS-specific message instead so callers can handle JcsFormatException uniformly.
-        ValidateNoUnrepresentableNumbers(node);
+        // This walk runs first, so its depth guard is what protects the serialize step below
+        // from overflowing on a deeply nested node.
+        ValidateNoUnrepresentableNumbers(node, 0);
 
         JsonDocument document;
         try
         {
-            document = JsonSerializer.SerializeToDocument(node);
+            document = JsonSerializer.SerializeToDocument(node, SerializeOptions);
         }
         catch (JsonException ex)
         {
@@ -92,12 +178,32 @@ public static class JcsCanonicalizer
 
         using (document)
         {
-            WriteElement(document.RootElement, destination);
+            WriteElement(document.RootElement, writer, 0);
         }
     }
 
-    private static void ValidateNoUnrepresentableNumbers(JsonNode node)
+    private static void ValidateOutputLimit(int maxOutputBytes)
     {
+        if (maxOutputBytes < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxOutputBytes), maxOutputBytes, "Output size limit must be at least 1.");
+        }
+    }
+
+    private static void ThrowIfTooDeep(int depth)
+    {
+        if (depth > MaxDepth)
+        {
+            throw new JcsFormatException(
+                $"JSON nesting exceeds the canonicalization depth limit of {MaxDepth}.");
+        }
+    }
+
+    private static void ValidateNoUnrepresentableNumbers(JsonNode node, int depth)
+    {
+        ThrowIfTooDeep(depth);
+
         switch (node)
         {
             case JsonObject obj:
@@ -105,7 +211,7 @@ public static class JcsCanonicalizer
                 {
                     if (child is not null)
                     {
-                        ValidateNoUnrepresentableNumbers(child);
+                        ValidateNoUnrepresentableNumbers(child, depth + 1);
                     }
                 }
                 break;
@@ -115,7 +221,7 @@ public static class JcsCanonicalizer
                 {
                     if (item is not null)
                     {
-                        ValidateNoUnrepresentableNumbers(item);
+                        ValidateNoUnrepresentableNumbers(item, depth + 1);
                     }
                 }
                 break;
@@ -155,15 +261,17 @@ public static class JcsCanonicalizer
         }
     }
 
-    private static void WriteElement(JsonElement element, IBufferWriter<byte> writer)
+    private static void WriteElement(JsonElement element, IBufferWriter<byte> writer, int depth)
     {
+        ThrowIfTooDeep(depth);
+
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-                WriteObject(element, writer);
+                WriteObject(element, writer, depth);
                 break;
             case JsonValueKind.Array:
-                WriteArray(element, writer);
+                WriteArray(element, writer, depth);
                 break;
             case JsonValueKind.String:
                 WriteString(element.GetString()!, writer);
@@ -187,7 +295,7 @@ public static class JcsCanonicalizer
         }
     }
 
-    private static void WriteObject(JsonElement obj, IBufferWriter<byte> writer)
+    private static void WriteObject(JsonElement obj, IBufferWriter<byte> writer, int depth)
     {
         WriteByte(writer, (byte)'{');
 
@@ -210,13 +318,13 @@ public static class JcsCanonicalizer
 
             WriteString(properties[i].Name, writer);
             WriteByte(writer, (byte)':');
-            WriteElement(properties[i].Value, writer);
+            WriteElement(properties[i].Value, writer, depth + 1);
         }
 
         WriteByte(writer, (byte)'}');
     }
 
-    private static void WriteArray(JsonElement arr, IBufferWriter<byte> writer)
+    private static void WriteArray(JsonElement arr, IBufferWriter<byte> writer, int depth)
     {
         WriteByte(writer, (byte)'[');
 
@@ -229,7 +337,7 @@ public static class JcsCanonicalizer
             }
 
             first = false;
-            WriteElement(item, writer);
+            WriteElement(item, writer, depth + 1);
         }
 
         WriteByte(writer, (byte)']');
@@ -374,5 +482,35 @@ public static class JcsCanonicalizer
         }
 
         writer.Advance(ascii.Length);
+    }
+
+    /// <summary>
+    /// Forwards buffer requests to an inner writer while enforcing a maximum committed-byte
+    /// count. Because every byte the canonicalizer emits is committed through
+    /// <see cref="Advance"/>, this single choke point bounds the total output. The throw
+    /// happens <em>before</em> the crossing bytes are committed to the inner writer, so a
+    /// caller-supplied destination never receives more than the limit.
+    /// </summary>
+    private sealed class LimitedBufferWriter(IBufferWriter<byte> inner, int maxBytes) : IBufferWriter<byte>
+    {
+        private int _written;
+
+        public void Advance(int count)
+        {
+            // `maxBytes - _written` is the remaining budget (always >= 0, since we throw before
+            // exceeding it). Comparing this way avoids any int overflow on `_written + count`.
+            if (count > maxBytes - _written)
+            {
+                throw new JcsFormatException(
+                    $"Canonical output exceeds the limit of {maxBytes} bytes.");
+            }
+
+            _written += count;
+            inner.Advance(count);
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0) => inner.GetMemory(sizeHint);
+
+        public Span<byte> GetSpan(int sizeHint = 0) => inner.GetSpan(sizeHint);
     }
 }

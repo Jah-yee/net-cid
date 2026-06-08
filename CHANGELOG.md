@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Released]
 
+### Added
+
+- `JcsCanonicalizer.DefaultMaxOutputByteLength` (1 MiB) and `maxOutputBytes` overloads on every `Canonicalize` method, mirroring the configurable input-size limits on the CID/Multibase parse paths. Canonicalization whose UTF-8 output would exceed the limit throws `JcsFormatException`; the crossing byte is rejected before it is committed, so a caller-supplied `IBufferWriter<byte>` never receives more than the limit. Callers processing known-safe, larger documents can raise the cap per call ([#16](https://github.com/moisesja/net-cid/issues/16))
+- `Cid.FromCanonicalJson` gained an optional `maxOutputBytes` parameter (default `JcsCanonicalizer.DefaultMaxOutputByteLength`) so the convenience CID-from-JSON path can raise the same cap; existing call sites are unaffected ([#16](https://github.com/moisesja/net-cid/issues/16))
+
+### Security
+
+- `JcsCanonicalizer` now enforces a maximum JSON nesting depth of 64 (matching `System.Text.Json`'s default `MaxDepth`). Input nested deeper — in either the `NaN`/`±infinity` validation pre-pass or the core serialization walk — throws `JcsFormatException` instead of recursing without bound and overflowing the stack. Because JCS processes untrusted credential JSON and a `StackOverflowException` cannot be caught in .NET (it terminates the process), the previous unbounded recursion was a denial-of-service vector ([#16](https://github.com/moisesja/net-cid/issues/16))
+- `JcsCanonicalizer` also caps canonical output at `DefaultMaxOutputByteLength` (1 MiB) by default, as defense-in-depth against runaway output from untrusted JSON. **Potentially breaking:** callers that previously canonicalized documents producing more than 1 MiB of output must now pass an explicit `maxOutputBytes` (e.g. `int.MaxValue`) — on the new `Canonicalize` overloads or via the new `Cid.FromCanonicalJson` `maxOutputBytes` parameter ([#16](https://github.com/moisesja/net-cid/issues/16))
+
 ## [1.6.0] - 2026-06-07
 
 ### Added

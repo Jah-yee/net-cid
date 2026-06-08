@@ -19,3 +19,4 @@ artifacts/
 
 # OS files
 .DS_Store
+.claude/settings.json
