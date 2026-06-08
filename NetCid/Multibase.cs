@@ -228,6 +228,13 @@ public static class Multibase
 
     private static byte[] DecodeBase64Url(ReadOnlySpan<char> payload)
     {
+        // Unlike the base32 path (whose SimpleBase decoder masks unused trailing bits, which is why
+        // ValidateBase32Payload exists), System.Buffers.Text.Base64Url.DecodeFromChars rejects
+        // non-canonical input itself: non-zero unused trailing bits in the final partial group throw
+        // FormatException. So there is deliberately no ValidateBase64UrlTrailingBits accumulator here.
+        // The rejection (and thus CID non-malleability for base64url) is pinned by
+        // MultibaseTests.Decode_ThrowsOnInvalidBase64UrlTrailingBits and
+        // Decode_RejectsBase64UrlMalleabilityCollision to catch any decoder/runtime regression. See #19.
         ValidateBase64UrlPayload(payload);
 
         if (payload.IsEmpty)
