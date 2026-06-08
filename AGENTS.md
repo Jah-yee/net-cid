@@ -54,7 +54,7 @@ This file provides instructions for AI agents and human contributors working in 
 
 - Never mark a task complete without proving it works
 - Diff behavior between main and your changes when relevant
-- Ask yourself: "Would a staff engineer approve this,"
+- Ask yourself: "Would a staff engineer approve this?"
 - Run tests, check logs, demonstrate correctness
 
 ### 5. Demand Elegance (Balanced)
@@ -77,7 +77,7 @@ This file provides instructions for AI agents and human contributors working in 
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to 'tasks/todo{timestamp}.md
+5. **Document Results**: Add review section to 'tasks/todo.md'
 6. **Capture Lessons**: Update 'tasks/lessons.md' after corrections
 7. **Update Documents and Examples**: Always keep any relevant documentation and examples current with your code changes
 
