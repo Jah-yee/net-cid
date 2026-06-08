@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The same value written as `9007199254740993` or `9007199254740993.0` now yields identical bytes — the determinism guarantee the v1 fast path silently broke.
   - Literals so large they parse to `±∞` (e.g. a 400-digit integer) still throw the existing infinity error.
 
+### Security
+
+- `JcsCanonicalizer` now rejects JSON objects with duplicate member names (throws `JcsFormatException`) instead of emitting them. RFC 8785 builds on I-JSON (RFC 7493 §2.3), which forbids duplicate names; `System.Text.Json`'s `JsonDocument.Parse` preserves duplicates, so the previous behavior emitted non-canonical JSON that different parsers could read differently — a signature-confusion vector for the data-integrity pipeline. Both the `JsonElement` overload and the `JsonNode?` / `IBufferWriter<byte>` overloads now fail closed ([#17](https://github.com/moisesja/net-cid/issues/17))
+
 ## [1.5.0] - 2026-05-22
 
 ### Added

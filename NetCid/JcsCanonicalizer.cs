@@ -20,6 +20,12 @@ namespace NetCid;
 /// <c>NaN</c> and <c>±infinity</c> throw <see cref="JcsFormatException"/>.
 /// </para>
 /// <para>
+/// Object member names must be unique. RFC 8785 builds on I-JSON (RFC 7493 §2.3), which
+/// forbids duplicate member names; duplicates — which <see cref="JsonDocument"/> preserves —
+/// throw <see cref="JcsFormatException"/> rather than producing ambiguous, non-canonical
+/// output that two parsers could read differently (a signature-confusion vector).
+/// </para>
+/// <para>
 /// JSON nested deeper than 64 levels throws <see cref="JcsFormatException"/> rather than
 /// overflowing the stack. Because JCS processes untrusted credential JSON, the unbounded
 /// recursion that would otherwise occur is a denial-of-service vector: a
@@ -62,7 +68,8 @@ public static class JcsCanonicalizer
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="JcsFormatException">
     /// The node contains a value JCS cannot represent deterministically — <c>NaN</c>
-    /// or <c>±infinity</c> — nests deeper than the supported limit of 64 levels, or
+    /// or <c>±infinity</c> — has duplicate object member names, nests deeper than the
+    /// supported limit of 64 levels, or
     /// canonicalizes to more than <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonNode? node)
@@ -75,8 +82,8 @@ public static class JcsCanonicalizer
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
     /// <exception cref="JcsFormatException">
-    /// The node contains a value JCS cannot represent deterministically, nests deeper than
-    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// The node contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
     /// <paramref name="maxOutputBytes"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonNode? node, int maxOutputBytes)
@@ -91,8 +98,8 @@ public static class JcsCanonicalizer
     /// </summary>
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="JcsFormatException">
-    /// The element contains a value JCS cannot represent deterministically, nests deeper than
-    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// The element contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
     /// <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonElement element)
@@ -105,8 +112,8 @@ public static class JcsCanonicalizer
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
     /// <exception cref="JcsFormatException">
-    /// The element contains a value JCS cannot represent deterministically, nests deeper than
-    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// The element contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
     /// <paramref name="maxOutputBytes"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonElement element, int maxOutputBytes)
@@ -125,8 +132,8 @@ public static class JcsCanonicalizer
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="destination"/> is <see langword="null"/>.</exception>
     /// <exception cref="JcsFormatException">
-    /// The node contains a value JCS cannot represent deterministically, nests deeper than
-    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// The node contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
     /// <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static void Canonicalize(JsonNode? node, IBufferWriter<byte> destination)
@@ -139,8 +146,8 @@ public static class JcsCanonicalizer
     /// <exception cref="ArgumentNullException"><paramref name="destination"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
     /// <exception cref="JcsFormatException">
-    /// The node contains a value JCS cannot represent deterministically, nests deeper than
-    /// the supported limit of 64 levels, or canonicalizes to more than
+    /// The node contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
     /// <paramref name="maxOutputBytes"/> bytes.
     /// </exception>
     public static void Canonicalize(JsonNode? node, IBufferWriter<byte> destination, int maxOutputBytes)
@@ -163,7 +170,21 @@ public static class JcsCanonicalizer
         // JCS-specific message instead so callers can handle JcsFormatException uniformly.
         // This walk runs first, so its depth guard is what protects the serialize step below
         // from overflowing on a deeply nested node.
-        ValidateNoUnrepresentableNumbers(node, 0);
+        try
+        {
+            ValidateNoUnrepresentableNumbers(node, 0);
+        }
+        catch (ArgumentException ex)
+        {
+            // A parsed JsonObject lazily builds its backing dictionary on first enumeration and
+            // rejects duplicate member names with an ArgumentException. That enumeration is the
+            // only ArgumentException source in the walk above — NaN/±infinity throw
+            // JcsFormatException, which is not an ArgumentException and so propagates untouched.
+            // Translate the duplicate into the JCS-specific exception so this overload fails the
+            // same way the JsonElement path does in WriteObject (RFC 8785 / RFC 7493).
+            throw new JcsFormatException(
+                "Duplicate object member name is not allowed (RFC 8785 / RFC 7493).", ex);
+        }
 
         JsonDocument document;
         try
@@ -308,6 +329,20 @@ public static class JcsCanonicalizer
         }
 
         properties.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
+
+        // RFC 8785 builds on I-JSON (RFC 7493 §2.3), which forbids duplicate member names.
+        // JsonDocument.Parse preserves duplicates, so reject them rather than emit both: two
+        // members with the same name are non-canonical and let different parsers disagree on the
+        // authoritative value — a signature-confusion vector. After the ordinal sort above, any
+        // duplicate names are adjacent, so a single linear scan finds them.
+        for (var i = 1; i < properties.Count; i++)
+        {
+            if (string.Equals(properties[i].Name, properties[i - 1].Name, StringComparison.Ordinal))
+            {
+                throw new JcsFormatException(
+                    $"Duplicate object member name '{properties[i].Name}' is not allowed (RFC 8785 / RFC 7493).");
+            }
+        }
 
         for (var i = 0; i < properties.Count; i++)
         {

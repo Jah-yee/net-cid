@@ -492,3 +492,64 @@
   - `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --no-build --tl:off` — 6/6.
   - `dotnet run --project examples/jcs-interface/JcsInterfaceExample.csproj -c Release --no-build --tl:off` — IEEE-754 section prints the issue's vector table (`1.5 → 1.5`, `1e-7 → 1e-7`, `1e21 → 1e+21`, `5e-324 → 5e-324`, `333333333.3333332897 → 333333333.3333333`); NaN and +∞ rejection messages still fire.
 - **Remaining for merge**: trigger `jcs-number-conformance.yml` on the PR branch via `gh workflow run` to confirm the full ~100M-vector cyberphone set passes end-to-end, then commit the observed SHA-256 into `CONFORMANCE_EXPECTED_SHA256` for future runs.
+
+---
+
+# Task: S2 — JCS must reject duplicate object member names (Issue #17)
+
+## Scope
+
+- RFC 8785 builds on I-JSON (RFC 7493 §2.3), which forbids duplicate object member names. The current canonicalizer can emit duplicate keys, yielding non-canonical JSON and a signature-confusion vector (different parsers disagree on the authoritative value).
+- Make duplicate-key input throw `JcsFormatException` on **both** public surfaces (`JsonElement` and `JsonNode?` overloads, plus the `IBufferWriter<byte>` form).
+
+## Investigation findings (empirically verified in a /tmp scratch project, net10.0)
+
+- `JsonDocument.Parse("{\"a\":1,\"a\":2}")` **preserves** both members → the `Canonicalize(JsonElement)` core (`WriteElement` → `WriteObject`) emits `{"a":1,"a":2}`. This is the vulnerable path.
+- `JsonNode.Parse("{...dup...}")` parses lazily (no throw). **Enumerating** the resulting `JsonObject` throws `System.ArgumentException` ("An item with the same key has already been added. Key: a"). `JsonSerializer.SerializeToDocument(node)` **preserves** duplicates (no throw).
+- `Canonicalize(JsonNode?, …)` calls `ValidateNoUnrepresentableNumbers(node)` first, which enumerates every object → today it throws raw `ArgumentException` on a duplicate node (wrong exception type, not `JcsFormatException`).
+- Duplicates can only come from **parsing**; programmatic `obj["a"]=1; obj["a"]=2` overwrites (count stays 1). NaN/±∞ can only come from **programmatic** `JsonValue.Create(double.NaN)` — `SerializeToDocument` of a NaN node throws `ArgumentException` (which is exactly why the NaN pre-walk exists). The two failure modes are disjoint, so the only `ArgumentException` source inside `ValidateNoUnrepresentableNumbers` is duplicate-key enumeration.
+
+## Design decision
+
+- **Single structural guard in `WriteObject` (the shared canonical core).** After the existing ordinal `properties.Sort(...)`, duplicate names are adjacent; scan adjacent pairs and `throw new JcsFormatException($"Duplicate object member name '…' is not allowed (RFC 8785 / RFC 7493).")`. This fixes the `JsonElement` overload (the real vulnerability) and also resolves the noted unstable-sort concern for duplicates (they can never be emitted). Validates before any bytes are written.
+- **`JsonNode` overload translation (fail-closed at the point of detection).** Wrap only the `ValidateNoUnrepresentableNumbers(node)` call in `try { … } catch (ArgumentException ex)` and rethrow as `JcsFormatException("Duplicate object member name is not allowed (RFC 8785 / RFC 7493).", ex)`. The inner exception carries the offending key. This is chosen over a "catch-and-fall-through-to-WriteObject" trick because a security check should throw immediately where it is detected (no reliance on a downstream component), and it never swallows. A code comment documents that duplicate-key enumeration is the only `ArgumentException` source here (NaN/±∞ throw `JcsFormatException`, which is not an `ArgumentException` and so propagates untouched).
+- No version bump: `1.6.0` is unreleased and is the issue milestone.
+
+## Plan
+
+- [x] `NetCid/JcsCanonicalizer.cs`:
+  - [x] In `WriteObject`, after `properties.Sort(...)`, add an adjacent-duplicate scan that throws `JcsFormatException` naming the duplicate member.
+  - [x] In `Canonicalize(JsonNode?, IBufferWriter<byte>)`, wrap `ValidateNoUnrepresentableNumbers(node)` in `try/catch (ArgumentException)` → translate to `JcsFormatException` (preserve inner exception), with an explanatory comment.
+  - [x] Document the strict no-duplicates contract in the class `<remarks>` and extend the `<exception cref="JcsFormatException">` docs on all six public overloads.
+- [x] `NetCid.Tests/JcsCanonicalizerTests.cs` — add tests:
+  - [x] `Duplicate_Keys_Throw_JcsFormatException` — `JsonElement` overload, `{"a":1,"a":2}` via `JsonDocument`; assert message names `a`.
+  - [x] `Nested_Duplicate_Keys_Throw_JcsFormatException` — `JsonElement`, `{"x":{"a":1,"a":2}}`.
+  - [x] `Duplicate_Keys_In_Array_Element_Throw_JcsFormatException` — `JsonElement`, `[{"a":1,"a":2}]` (array-recursion path).
+  - [x] `Triple_Duplicate_Keys_Throw_JcsFormatException` — `JsonElement`, `{"a":1,"a":2,"a":3}` (adjacency loop robustness).
+  - [x] `JsonNode_Overload_Duplicate_Keys_Throw_JcsFormatException` — `JsonNode.Parse` path (asserts `InnerException` is `ArgumentException`).
+  - [x] `JsonNode_Overload_Nested_Duplicate_Keys_Throw_JcsFormatException` — nested via `JsonNode.Parse`.
+  - [x] `IBufferWriter_Overload_Duplicate_Keys_Throw_JcsFormatException` — `Canonicalize(JsonNode?, writer)`.
+  - [x] (added) `Distinct_Keys_With_Shared_Prefix_Do_Not_Throw` — false-positive guard (`a` vs `ab`).
+- [x] `examples/jcs-interface/Program.cs` — add a duplicate-key rejection demo to the "Negative cases" section.
+- [x] `CHANGELOG.md` — add a `### Security` subsection under `## [1.6.0]` referencing #17.
+- [x] `SPECIFICATIONS.md` (renamed from `net-cid-implemented-specs.md` upstream) — added an I-JSON no-duplicates conformance note; updated the README JCS hardening paragraph.
+- [x] Adversarial review subagent attempts to bypass the guard before declaring done.
+
+## Verification Checklist
+
+- [x] `dotnet build NetCid/NetCid.csproj -c Release --no-restore -warnaserror --tl:off` — 0 warnings, 0 errors
+- [x] `dotnet test NetCid.Tests/NetCid.Tests.csproj -c Release --tl:off` — 207 passed, 1 skipped (8 new tests included)
+- [x] `dotnet test NetCid.IntegrationTests/NetCid.IntegrationTests.csproj -c Release --tl:off` — 6 passed (no regression)
+- [x] `dotnet run --project examples/jcs-interface/JcsInterfaceExample.csproj -c Release --tl:off` — prints `duplicate key rejected: ...` alongside NaN/±∞
+- [x] Adversarial review finds no bypass (40+ inputs across all four surfaces)
+
+## Review
+
+- **Rebased first.** The branch was 15 commits behind `origin/main`; the latest merge (#37, issue #16) had already added depth (`MaxDepth=64`) and output-size (`LimitedBufferWriter`) guards to the same file and changed every writer signature to thread a `depth` parameter. Reset onto `origin/main` and adapted the change to the new shape before implementing.
+- **Two coordinated guards, both fail-closed.**
+  - `WriteObject` (shared `JsonElement` core, reached by every overload): after the ordinal sort, a linear adjacency scan throws `JcsFormatException("Duplicate object member name '…' is not allowed (RFC 8785 / RFC 7493).")`. Fixes the actual vulnerability (the `JsonElement` overload silently emitted duplicates because `JsonDocument` preserves them) and moots the unstable-sort concern (duplicates can never be emitted).
+  - `Canonicalize(JsonNode?, IBufferWriter<byte>, int)`: the `ValidateNoUnrepresentableNumbers` pre-walk enumerates objects, which makes a parsed `JsonObject` throw `ArgumentException` on duplicates. Wrapped only that call in `try/catch (ArgumentException)` and translated to `JcsFormatException` (inner exception preserved). This is orthogonal to the depth guard (which throws `JcsFormatException`, not `ArgumentException`, so it is never mislabeled) and to `ValidateOutputLimit`/`ThrowIfNull` (which run before the wrapped call).
+- **No version bump** — `1.6.0` is unreleased (no `v1.6.0` tag) and is the issue milestone; folded a `### Security` entry into the existing section.
+- **Adversarial review (subagent, 40+ inputs): clean.** Confirmed no bypass on any surface; no false positives on legitimately-distinct keys (NFC vs NFD `é`, case-differing, shared-prefix, distinct surrogate pairs); NaN/±∞ messages preserved and never mislabeled; depth guard correctly wins over the dup guard at depth ≥65; no partial output leaked to a caller's `IBufferWriter`; and duplicate-key enumeration is genuinely the only `ArgumentException` source in the pre-walk. Two out-of-scope, pre-existing behaviors noted (case-insensitive `JsonObject` collisions — the fix *improves* this from a leaky raw `ArgumentException`; lone-surrogate keys throw `InvalidOperationException`).
+- **Acceptance criteria met:** duplicate-key input throws `JcsFormatException` on both overloads; existing canonicalization tests unaffected (207 unit + 6 integration green).
+- **Out-of-scope observation:** issue #16's depth/output-cap hardening landed in code but has no `CHANGELOG.md` entry — left untouched here.
