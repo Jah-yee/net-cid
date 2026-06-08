@@ -154,6 +154,124 @@ public sealed class JcsCanonicalizerTests
         Assert.Equal(new byte[] { 0x22, 0xF0, 0x9F, 0x98, 0x80, 0x22 }, bytes);
     }
 
+    // --- Invalid UTF-16 / unpaired surrogates (issue #18): an unpaired surrogate has no UTF-8
+    // representation. System.Text.Json would silently substitute U+FFFD, collapsing distinct
+    // malformed inputs to identical bytes (a collision / signature-confusion vector). Every public
+    // entry \u2014 string value or member name, JsonNode or JsonElement \u2014 must throw JcsFormatException
+    // instead, while valid surrogate PAIRS and a legitimate U+FFFD pass through unchanged.
+
+    [Fact]
+    public void Unpaired_High_Surrogate_Throws()
+    {
+        // JsonNode (raw .NET string) path. Pre-fix this produced the silent bytes 22 EF BF BD 22
+        // because SerializeToDocument rewrote U+D800 to U+FFFD upstream.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uD800")));
+    }
+
+    [Fact]
+    public void Unpaired_Low_Surrogate_Throws()
+    {
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uDC00")));
+    }
+
+    [Fact]
+    public void High_Surrogate_Followed_By_Non_Surrogate_Throws()
+    {
+        // A high surrogate must be followed by a low surrogate; a normal char after it is invalid.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uD800x")));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_In_Object_Key_Throws()
+    {
+        // Raw JsonObject member name (the issue omits keys, but they are strings too \u2014 pre-fix this
+        // silently produced {"<U+FFFD>":1}).
+        var obj = new JsonObject { ["\uD800"] = 1 };
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(obj));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_Nested_In_Array_Throws()
+    {
+        var node = new JsonArray("ok", JsonValue.Create("\uDC00"));
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(node));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_Via_JsonNode_Parse_Throws()
+    {
+        // Element-backed JsonValue (JsonNode.Parse). Pre-fix this threw a non-surrogate-specific
+        // exception; it must be a JcsFormatException with the UTF-16 message.
+        var ex = Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonNode.Parse("\"\\uD800\"")));
+        Assert.Contains("UTF-16", ex.Message);
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_JsonElement_Value_Throws()
+    {
+        // JsonElement path: element.GetString() throws InvalidOperationException \u2014 must be converted.
+        var ex = Assert.Throws<JcsFormatException>(() => CanonElement("\"\\uD800\""));
+        Assert.Contains("UTF-16", ex.Message);
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_JsonElement_Object_Key_Throws()
+    {
+        Assert.Throws<JcsFormatException>(() => CanonElement("{\"\\uD800\":1}"));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_IBufferWriter_Overload_Throws()
+    {
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(
+            () => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uD800"), sink));
+    }
+
+    [Theory]
+    [InlineData('\uD800')] // lone high surrogate
+    [InlineData('\uDC00')] // lone low surrogate
+    [InlineData('\uDFFF')]
+    public void Unpaired_Surrogate_Char_Backed_JsonValue_Throws(char surrogate)
+    {
+        // A char-backed JsonValue serializes as a one-code-unit string; a single UTF-16 unit can
+        // never be a valid pair, so any surrogate char is unpaired. Found by adversarial review:
+        // pre-fix this bypassed the string-only check and silently produced 22 EF BF BD 22.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create(surrogate)));
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create((char?)surrogate)));
+        var obj = new JsonObject { ["v"] = JsonValue.Create(surrogate) };
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(obj));
+    }
+
+    [Fact]
+    public void Valid_Char_Backed_JsonValue_Is_Unchanged()
+    {
+        // Non-surrogate chars must still canonicalize as their one-char string form.
+        Assert.Equal(new byte[] { 0x22, 0x41, 0x22 }, JcsCanonicalizer.Canonicalize(JsonValue.Create('A')));
+        Assert.Equal(new byte[] { 0x22, 0xC3, 0xA9, 0x22 }, JcsCanonicalizer.Canonicalize(JsonValue.Create('é')));
+    }
+
+    [Fact]
+    public void Legitimate_Replacement_Char_U_FFFD_Still_Canonicalises()
+    {
+        // U+FFFD is a valid, assigned character (not a surrogate). It must NOT be rejected and must
+        // serialize to its UTF-8 bytes EF BF BD \u2014 guarding against over-rejection.
+        var expected = new byte[] { 0x22, 0xEF, 0xBF, 0xBD, 0x22 };
+        Assert.Equal(expected, JcsCanonicalizer.Canonicalize(JsonValue.Create("\uFFFD")));
+        using var doc = JsonDocument.Parse("\"\\uFFFD\"");
+        Assert.Equal(expected, JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
+    [Fact]
+    public void Valid_Surrogate_Pair_Via_JsonElement_Is_Unchanged()
+    {
+        // Regression for the JsonElement try/catch: a valid pair must still round-trip byte-for-byte.
+        using var doc = JsonDocument.Parse("\"\\uD83D\\uDE00\"");
+        Assert.Equal(
+            new byte[] { 0x22, 0xF0, 0x9F, 0x98, 0x80, 0x22 },
+            JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
     [Fact]
     public void Audit_Entry_Example_Matches_Expected_Canonical_Form()
     {

@@ -20,6 +20,19 @@ namespace NetCid;
 /// <c>NaN</c> and <c>±infinity</c> throw <see cref="JcsFormatException"/>.
 /// </para>
 /// <para>
+/// Strings (and object member names) must be well-formed UTF-16. An unpaired surrogate has no
+/// UTF-8 representation; rather than let <see cref="JsonSerializer"/> silently substitute U+FFFD
+/// — which would collapse two distinct malformed inputs to identical bytes — it throws
+/// <see cref="JcsFormatException"/>. Valid surrogate pairs and a legitimate U+FFFD are unaffected.
+/// This guard covers parsed input (<see cref="JsonElement"/>, <see cref="JsonNode.Parse(string,JsonNodeOptions?,JsonDocumentOptions)"/>)
+/// and <see cref="JsonValue"/> nodes built from <see langword="string"/> or <see langword="char"/>
+/// primitives. A <see cref="JsonValue"/> wrapping an arbitrary CLR object (e.g.
+/// <c>JsonValue.Create(someObject)</c>, a dictionary, or a collection) is expanded by
+/// <see cref="JsonSerializer"/>, which substitutes U+FFFD <em>before</em> this validation can
+/// inspect its members; when canonicalizing untrusted UTF-16, pass parsed JSON or primitive-built
+/// nodes rather than a node wrapping a raw CLR object.
+/// </para>
+/// <para>
 /// Object member names must be unique. RFC 8785 builds on I-JSON (RFC 7493 §2.3), which
 /// forbids duplicate member names; duplicates — which <see cref="JsonDocument"/> preserves —
 /// throw <see cref="JcsFormatException"/> rather than producing ambiguous, non-canonical
@@ -121,7 +134,21 @@ public static class JcsCanonicalizer
         ValidateOutputLimit(maxOutputBytes);
 
         var writer = new ArrayBufferWriter<byte>();
-        WriteElement(element, new LimitedBufferWriter(writer, maxOutputBytes), 0);
+        try
+        {
+            WriteElement(element, new LimitedBufferWriter(writer, maxOutputBytes), 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // A parsed string value or object member name holding an unpaired UTF-16 surrogate
+            // makes JsonElement.GetString()/JsonProperty.Name throw InvalidOperationException.
+            // Surface it as the uniform JcsFormatException; the local buffer is discarded, so no
+            // partial — and no silently U+FFFD-substituted — output escapes. (Duplicate-member and
+            // depth/output-limit errors throw JcsFormatException, not InvalidOperationException, so
+            // they propagate untouched.)
+            throw new JcsFormatException(UnpairedSurrogateMessage, ex);
+        }
+
         return writer.WrittenSpan.ToArray();
     }
 
@@ -165,21 +192,31 @@ public static class JcsCanonicalizer
             return;
         }
 
-        // JsonNode may wrap raw .NET doubles/floats holding NaN/±infinity. The default
-        // System.Text.Json serializer would throw a generic JsonException; surface a
-        // JCS-specific message instead so callers can handle JcsFormatException uniformly.
-        // This walk runs first, so its depth guard is what protects the serialize step below
-        // from overflowing on a deeply nested node.
+        // JsonNode may wrap raw .NET doubles/floats holding NaN/±infinity, or strings and member
+        // names containing unpaired UTF-16 surrogates. The default System.Text.Json serializer
+        // would silently rewrite a surrogate to U+FFFD (collapsing distinct malformed inputs to
+        // identical bytes) or throw a non-JCS exception; surface a JcsFormatException instead so
+        // callers can handle it uniformly. This walk runs first, so its depth guard protects the
+        // serialize step below from overflowing on a deeply nested node, and it inspects raw
+        // strings before serialization can mangle them.
         try
         {
-            ValidateNoUnrepresentableNumbers(node, 0);
+            ValidateNode(node, 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // A parsed JsonNode holding an element-backed unpaired surrogate makes the value/key
+            // accessors in the walk throw InvalidOperationException ("incomplete UTF-16"); convert
+            // it to the same JcsFormatException the raw-string check produces.
+            throw new JcsFormatException(UnpairedSurrogateMessage, ex);
         }
         catch (ArgumentException)
         {
             // A parsed JsonObject lazily builds its backing dictionary on first enumeration and
             // rejects duplicate member names with an ArgumentException — the only ArgumentException
-            // source in the walk above (NaN/±infinity throw JcsFormatException, which is not an
-            // ArgumentException, so they propagate untouched). Don't translate it here: fall through
+            // source in the walk above (NaN/±infinity and unpaired surrogates throw JcsFormatException,
+            // which is not an ArgumentException, so they propagate untouched). Don't translate it here:
+            // fall through
             // to the serialize + WriteElement path below so WriteObject reports the duplicate with
             // its precise, key-naming message — the single source of truth the JsonElement overload
             // also uses. SerializeToDocument preserves duplicates, so the offending member is
@@ -221,18 +258,47 @@ public static class JcsCanonicalizer
         }
     }
 
-    private static void ValidateNoUnrepresentableNumbers(JsonNode node, int depth)
+    private const string UnpairedSurrogateMessage =
+        "JSON string contains invalid UTF-16 (unpaired surrogate); cannot canonicalize.";
+
+    // RFC 8785 §3.2.2.2 serializes strings as UTF-8. An unpaired UTF-16 surrogate has no UTF-8
+    // representation; System.Text.Json would silently substitute U+FFFD, so two distinct malformed
+    // inputs could collapse to identical canonical bytes (a collision / signature-confusion vector).
+    // Reject it instead. A valid surrogate PAIR (high followed by low) is left untouched, and a
+    // legitimately-supplied U+FFFD is not a surrogate, so it passes through unchanged.
+    private static void ThrowIfUnpairedSurrogate(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]))
+            {
+                if (i + 1 >= value.Length || !char.IsLowSurrogate(value[i + 1]))
+                {
+                    throw new JcsFormatException(UnpairedSurrogateMessage);
+                }
+
+                i++; // valid pair — skip the paired low surrogate
+            }
+            else if (char.IsLowSurrogate(value[i]))
+            {
+                throw new JcsFormatException(UnpairedSurrogateMessage);
+            }
+        }
+    }
+
+    private static void ValidateNode(JsonNode node, int depth)
     {
         ThrowIfTooDeep(depth);
 
         switch (node)
         {
             case JsonObject obj:
-                foreach (var (_, child) in obj)
+                foreach (var (key, child) in obj)
                 {
+                    ThrowIfUnpairedSurrogate(key);
                     if (child is not null)
                     {
-                        ValidateNoUnrepresentableNumbers(child, depth + 1);
+                        ValidateNode(child, depth + 1);
                     }
                 }
                 break;
@@ -242,7 +308,7 @@ public static class JcsCanonicalizer
                 {
                     if (item is not null)
                     {
-                        ValidateNoUnrepresentableNumbers(item, depth + 1);
+                        ValidateNode(item, depth + 1);
                     }
                 }
                 break;
@@ -277,6 +343,20 @@ public static class JcsCanonicalizer
                     {
                         throw new JcsFormatException("JCS cannot represent -infinity (RFC 8785 §3.2.2.3).");
                     }
+                }
+                else if (val.TryGetValue<string>(out var s) && s is not null)
+                {
+                    ThrowIfUnpairedSurrogate(s);
+                }
+                else if (val.TryGetValue<char>(out var ch) && char.IsSurrogate(ch))
+                {
+                    // A char-backed JsonValue (e.g. JsonValue.Create('\uD800')) serializes as a
+                    // one-code-unit JSON string. A single UTF-16 code unit can never form a
+                    // surrogate PAIR, so any surrogate char is unpaired and has no UTF-8
+                    // representation — reject it rather than let the serializer substitute U+FFFD.
+                    // (TryGetValue<string>/<double>/<float> all return false for a char-backed
+                    // value, so it reaches here; numbers and strings never match TryGetValue<char>.)
+                    throw new JcsFormatException(UnpairedSurrogateMessage);
                 }
                 break;
         }
