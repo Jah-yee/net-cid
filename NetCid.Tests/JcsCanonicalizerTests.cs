@@ -337,4 +337,185 @@ public sealed class JcsCanonicalizerTests
         var expected = "\"" + big + "\"";
         Assert.Equal(expected, Canon(JsonValue.Create(big)));
     }
+
+    // --- Recursion-depth limit (issue #16): deep input must throw JcsFormatException,
+    // never an uncatchable StackOverflowException. The internal limit is 64 (matches
+    // System.Text.Json's default MaxDepth); it is private, so the literal is used here.
+
+    // Wrap a value in `depth` nested single-element arrays. Built programmatically so the
+    // test exercises the canonicalizer's own guards directly, independent of any parse-time
+    // MaxDepth behaviour. The innermost value then sits at nesting depth `depth`.
+    private static JsonNode NestArrays(int depth)
+    {
+        JsonNode node = JsonValue.Create(1);
+        for (var i = 0; i < depth; i++)
+        {
+            node = new JsonArray { node };
+        }
+
+        return node;
+    }
+
+    [Fact]
+    public void JsonNode_At_Depth_Limit_Canonicalises()
+    {
+        var expected = new string('[', 64) + "1" + new string(']', 64);
+        Assert.Equal(expected, Canon(NestArrays(64)));
+    }
+
+    [Fact]
+    public void JsonNode_Just_Over_Limit_Throws_JcsFormatException()
+    {
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(NestArrays(65)));
+    }
+
+    [Fact]
+    public void JsonNode_Far_Over_Limit_Throws_Without_StackOverflow()
+    {
+        // 100_000 deep: if the guard worked only after recursing the whole tree this would
+        // crash the test host. It must throw after ~65 frames instead.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(NestArrays(100_000)));
+    }
+
+    [Fact]
+    public void JsonElement_At_Depth_Limit_Canonicalises()
+    {
+        var atLimit = new string('[', 64) + "1" + new string(']', 64);
+        using var doc = JsonDocument.Parse(atLimit, new JsonDocumentOptions { MaxDepth = 256 });
+        Assert.Equal(atLimit, Encoding.UTF8.GetString(JcsCanonicalizer.Canonicalize(doc.RootElement)));
+    }
+
+    [Fact]
+    public void JsonElement_Over_Limit_Throws_JcsFormatException()
+    {
+        // Just-over-limit boundary: verifies the depth-64 policy gate on the JsonElement path.
+        // (Depth 70 would NOT overflow the stack on its own — see the far-over test below for
+        // the actual no-crash proof.) Parse with headroom so the document itself builds; our
+        // guard (limit 64) is what rejects it.
+        var tooDeep = new string('[', 70) + "1" + new string(']', 70);
+        using var doc = JsonDocument.Parse(tooDeep, new JsonDocumentOptions { MaxDepth = 256 });
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
+    [Fact]
+    public void JsonElement_Far_Over_Limit_Throws_Without_StackOverflow()
+    {
+        // The JsonElement path (WriteElement -> WriteArray -> WriteElement) has no
+        // SerializeToDocument boundary and no parse-time guard, so before the fix it recursed
+        // unbounded and overflowed the stack in the low thousands of frames. 100_000 deep is
+        // well past that threshold: the depth-64 guard must throw JcsFormatException after ~65
+        // frames instead of terminating the process with an uncatchable StackOverflowException.
+        // Parse with no practical depth limit so the document builds and our guard is the gate.
+        var tooDeep = new string('[', 100_000) + "1" + new string(']', 100_000);
+        using var doc = JsonDocument.Parse(tooDeep, new JsonDocumentOptions { MaxDepth = int.MaxValue });
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
+    // --- Canonical-output-byte cap (issue #16, optional guard): bound the size of the
+    // produced output as defense-in-depth on untrusted JSON. "[1,2,3,4,5]" canonicalizes to
+    // exactly 11 bytes, which makes the byte boundaries easy to assert against an explicit limit.
+
+    [Fact]
+    public void Default_Output_Limit_Is_One_MiB()
+    {
+        Assert.Equal(1_048_576, JcsCanonicalizer.DefaultMaxOutputByteLength);
+    }
+
+    [Fact]
+    public void Output_At_Explicit_Limit_Canonicalises()
+    {
+        var node = JsonNode.Parse("[1,2,3,4,5]"); // 11 canonical bytes
+        Assert.Equal("[1,2,3,4,5]", Encoding.UTF8.GetString(JcsCanonicalizer.Canonicalize(node, maxOutputBytes: 11)));
+    }
+
+    [Fact]
+    public void Output_One_Byte_Over_Limit_Throws_JcsFormatException()
+    {
+        var node = JsonNode.Parse("[1,2,3,4,5]"); // needs 11 bytes; allow only 10
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(node, maxOutputBytes: 10));
+    }
+
+    [Fact]
+    public void JsonElement_Output_Over_Limit_Throws_JcsFormatException()
+    {
+        using var doc = JsonDocument.Parse("[1,2,3,4,5]");
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement, maxOutputBytes: 5));
+    }
+
+    [Fact]
+    public void IBufferWriter_Output_Over_Limit_Throws_Without_Exceeding_Limit()
+    {
+        var node = JsonNode.Parse("[1,2,3,4,5]");
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(node, sink, maxOutputBytes: 5));
+        // The crossing byte is rejected before it is committed, so the caller's writer never
+        // receives more than the limit.
+        Assert.True(sink.WrittenCount <= 5, $"committed {sink.WrittenCount} bytes, expected <= 5");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Output_Limit_Below_One_Throws_ArgumentOutOfRange(int limit)
+    {
+        var node = JsonNode.Parse("1");
+        Assert.Throws<ArgumentOutOfRangeException>(() => JcsCanonicalizer.Canonicalize(node, limit));
+        using var doc = JsonDocument.Parse("1");
+        Assert.Throws<ArgumentOutOfRangeException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement, limit));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => JcsCanonicalizer.Canonicalize(node, new ArrayBufferWriter<byte>(), limit));
+    }
+
+    // A flat (depth-1) array whose canonical form exceeds the 1 MiB default cap, so ONLY the
+    // output cap — never the depth guard — can reject it. 200_000 * "123456" ≈ 1.4 MiB.
+    private static string OverDefaultCapArrayJson()
+    {
+        var sb = new StringBuilder(1_500_000);
+        sb.Append('[');
+        for (var i = 0; i < 200_000; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append("123456");
+        }
+
+        sb.Append(']');
+        return sb.ToString();
+    }
+
+    [Fact]
+    public void Default_Cap_Triggers_On_Output_Over_One_MiB()
+    {
+        // The default-ON cap is the shipped breaking change, so pin it directly: a regression
+        // that delegated with int.MaxValue (disabling the default) would otherwise pass the suite.
+        var json = OverDefaultCapArrayJson();
+
+        var ex = Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonNode.Parse(json)));
+        Assert.Contains(
+            JcsCanonicalizer.DefaultMaxOutputByteLength.ToString(CultureInfo.InvariantCulture), ex.Message);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement));
+
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonNode.Parse(json), sink));
+        Assert.True(sink.WrittenCount <= JcsCanonicalizer.DefaultMaxOutputByteLength);
+    }
+
+    [Fact]
+    public void Output_Above_Default_Succeeds_When_Limit_Raised()
+    {
+        // The documented escape hatch: an explicit raised cap lets known-safe large output
+        // through. This also exercises the overflow-safe `count > maxBytes - _written`
+        // arithmetic in LimitedBufferWriter with a large _written and maxBytes = int.MaxValue.
+        var node = JsonNode.Parse(OverDefaultCapArrayJson());
+        var bytes = JcsCanonicalizer.Canonicalize(node, maxOutputBytes: int.MaxValue);
+
+        Assert.True(bytes.Length > JcsCanonicalizer.DefaultMaxOutputByteLength);
+        Assert.Equal((byte)'[', bytes[0]);
+        Assert.Equal((byte)']', bytes[^1]);
+    }
 }

@@ -131,6 +131,8 @@ Base encoding/decoding (base32, base36, base58) delegates to the [SimpleBase](ht
 
 All parse/decode entry points enforce configurable maximum input sizes (`DefaultMaxInputStringLength`, `DefaultMaxInputByteLength`, `DefaultMaxInputLength`). This is a defense-in-depth measure for applications that parse CIDs from untrusted network input — a maliciously large input could otherwise cause excessive memory allocation. Callers can override limits via method overloads when processing known-safe data.
 
+`JcsCanonicalizer` applies the same defense-in-depth posture to nesting: it caps JSON nesting depth at 64 (matching `System.Text.Json`'s default `MaxDepth`) and throws `JcsFormatException` on deeper input. Without the cap, deeply nested untrusted JSON would recurse without bound and overflow the stack — and a `StackOverflowException` cannot be caught in .NET, so it terminates the process (a denial-of-service vector, since JCS processes untrusted credential JSON). It additionally caps the canonical UTF-8 output at `DefaultMaxOutputByteLength` (1 MiB), enforced through a single counting `IBufferWriter<byte>` wrapper that rejects the crossing byte before it is committed; callers can raise the cap via the `maxOutputBytes` overloads when processing known-safe data.
+
 ### Try-Pattern Methods
 
 Every throwing parse/decode method has a corresponding `TryParse` / `TryDecode` variant that returns `bool` instead of throwing. This follows .NET conventions and lets callers choose between exception-based and return-code-based error handling without a performance penalty.
