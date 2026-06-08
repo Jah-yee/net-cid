@@ -177,4 +177,42 @@ public sealed class MultibaseTests
         Assert.Equal(MultibaseEncoding.Base64Url, encoding);
         Assert.Empty(decoded);
     }
+
+    [Theory]
+    [InlineData("uAB")]   // 2-char group; final char's low 4 bits = 0001
+    [InlineData("uAP")]   // 2-char group; final char's low 4 bits = 1111
+    [InlineData("uAAB")]  // 3-char group; final char's low 2 bits = 01
+    [InlineData("uAAC")]  // 3-char group; final char's low 2 bits = 10
+    public void Decode_ThrowsOnInvalidBase64UrlTrailingBits(string nonCanonical)
+    {
+        // System.Buffers.Text.Base64Url.DecodeFromChars validates (does not mask) the unused
+        // trailing bits of the final partial group, so a non-canonical base64url payload is
+        // rejected — the same CID-malleability class the base32 path closes
+        // (cf. Decode_ThrowsOnInvalidBase32TrailingBits). See issue #19.
+        Assert.Throws<CidFormatException>(() => Multibase.Decode(nonCanonical));
+    }
+
+    [Fact]
+    public void Decode_RejectsBase64UrlMalleabilityCollision()
+    {
+        // "uAA" and "uAB" would both decode to the single byte 0x00 if the decoder masked the
+        // unused trailing bits. The canonical form decodes; the non-canonical form must throw,
+        // so two distinct strings cannot collide to the same CID bytes.
+        var canonical = Multibase.Decode("uAA", out var encoding);
+        Assert.Equal(MultibaseEncoding.Base64Url, encoding);
+        Assert.Equal(new byte[] { 0x00 }, canonical);
+
+        Assert.Throws<CidFormatException>(() => Multibase.Decode("uAB"));
+    }
+
+    [Theory]
+    [InlineData("uAA", 0x00)]  // canonical single zero byte
+    [InlineData("uAQ", 0x01)]  // canonical single byte 0x01 (final char's trailing bits legitimately zero)
+    public void Decode_AcceptsCanonicalShortBase64UrlPayload(string canonical, int expected)
+    {
+        var decoded = Multibase.Decode(canonical, out var encoding);
+
+        Assert.Equal(MultibaseEncoding.Base64Url, encoding);
+        Assert.Equal(new[] { (byte)expected }, decoded);
+    }
 }
