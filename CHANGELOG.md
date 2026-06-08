@@ -7,16 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Released]
 
-### Added
-
-- `JcsCanonicalizer.DefaultMaxOutputByteLength` (1 MiB) and `maxOutputBytes` overloads on every `Canonicalize` method, mirroring the configurable input-size limits on the CID/Multibase parse paths. Canonicalization whose UTF-8 output would exceed the limit throws `JcsFormatException`; the crossing byte is rejected before it is committed, so a caller-supplied `IBufferWriter<byte>` never receives more than the limit. Callers processing known-safe, larger documents can raise the cap per call ([#16](https://github.com/moisesja/net-cid/issues/16))
-- `Cid.FromCanonicalJson` gained an optional `maxOutputBytes` parameter (default `JcsCanonicalizer.DefaultMaxOutputByteLength`) so the convenience CID-from-JSON path can raise the same cap; existing call sites are unaffected ([#16](https://github.com/moisesja/net-cid/issues/16))
-
-### Security
-
-- `JcsCanonicalizer` now enforces a maximum JSON nesting depth of 64 (matching `System.Text.Json`'s default `MaxDepth`). Input nested deeper — in either the `NaN`/`±infinity` validation pre-pass or the core serialization walk — throws `JcsFormatException` instead of recursing without bound and overflowing the stack. Because JCS processes untrusted credential JSON and a `StackOverflowException` cannot be caught in .NET (it terminates the process), the previous unbounded recursion was a denial-of-service vector ([#16](https://github.com/moisesja/net-cid/issues/16))
-- `JcsCanonicalizer` also caps canonical output at `DefaultMaxOutputByteLength` (1 MiB) by default, as defense-in-depth against runaway output from untrusted JSON. **Potentially breaking:** callers that previously canonicalized documents producing more than 1 MiB of output must now pass an explicit `maxOutputBytes` (e.g. `int.MaxValue`) — on the new `Canonicalize` overloads or via the new `Cid.FromCanonicalJson` `maxOutputBytes` parameter ([#16](https://github.com/moisesja/net-cid/issues/16))
-
 ## [1.6.0] - 2026-06-07
 
 ### Added
@@ -26,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal `EcmaScriptNumber.ToCanonicalString(double)` helper implementing the ECMA-262 §6.1.6.1.20 algorithm against .NET's shortest-round-trip digit string
 - `jcs-number-conformance` workflow that downloads and (when `CONFORMANCE_EXPECTED_SHA256` is set) SHA-256-verifies cyberphone's `es6testfile100m.txt.gz` (100M-vector RFC 8785 conformance set) and runs it on PRs that touch the number formatter, plus `workflow_dispatch` and a weekly backstop. The SHA-256 pin is empty at merge time and tracked as a follow-up
 - Deterministic-seed 100k bit-pattern fuzz in `EcmaScriptNumberTests` that runs in every CI build
+- `JcsCanonicalizer.DefaultMaxOutputByteLength` (1 MiB) and `maxOutputBytes` overloads on every `Canonicalize` method, mirroring the configurable input-size limits on the CID/Multibase parse paths. Canonicalization whose UTF-8 output would exceed the limit throws `JcsFormatException`; the crossing byte is rejected before it is committed, so a caller-supplied `IBufferWriter<byte>` never receives more than the limit. Callers processing known-safe, larger documents can raise the cap per call ([#16](https://github.com/moisesja/net-cid/issues/16))
+- `Cid.FromCanonicalJson` gained an optional `maxOutputBytes` parameter (default `JcsCanonicalizer.DefaultMaxOutputByteLength`) so the convenience CID-from-JSON path can raise the same cap; existing call sites are unaffected ([#16](https://github.com/moisesja/net-cid/issues/16))
 
 ### Changed
 
@@ -35,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `"1000000000000000000000"` (> `ulong.MaxValue`) now canonicalizes as `"1e+21"` (was a `JcsFormatException`).
   - The same value written as `9007199254740993` or `9007199254740993.0` now yields identical bytes — the determinism guarantee the v1 fast path silently broke.
   - Literals so large they parse to `±∞` (e.g. a 400-digit integer) still throw the existing infinity error.
+
+### Security
+
+- `JcsCanonicalizer` now enforces a maximum JSON nesting depth of 64 (matching `System.Text.Json`'s default `MaxDepth`). Input nested deeper — in either the `NaN`/`±infinity` validation pre-pass or the core serialization walk — throws `JcsFormatException` instead of recursing without bound and overflowing the stack. Because JCS processes untrusted credential JSON and a `StackOverflowException` cannot be caught in .NET (it terminates the process), the previous unbounded recursion was a denial-of-service vector ([#16](https://github.com/moisesja/net-cid/issues/16))
+- `JcsCanonicalizer` also caps canonical output at `DefaultMaxOutputByteLength` (1 MiB) by default, as defense-in-depth against runaway output from untrusted JSON. **Potentially breaking:** callers that previously canonicalized documents producing more than 1 MiB of output must now pass an explicit `maxOutputBytes` (e.g. `int.MaxValue`) — on the new `Canonicalize` overloads or via the new `Cid.FromCanonicalJson` `maxOutputBytes` parameter ([#16](https://github.com/moisesja/net-cid/issues/16))
+- `JcsCanonicalizer` now rejects JSON objects with duplicate member names (throws `JcsFormatException`) instead of emitting them. RFC 8785 builds on I-JSON (RFC 7493 §2.3), which forbids duplicate names; `System.Text.Json`'s `JsonDocument.Parse` preserves duplicates, so the previous behavior emitted non-canonical JSON that different parsers could read differently — a signature-confusion vector for the data-integrity pipeline. Both the `JsonElement` overload and the `JsonNode?` / `IBufferWriter<byte>` overloads now fail closed ([#17](https://github.com/moisesja/net-cid/issues/17))
 
 ## [1.5.0] - 2026-05-22
 

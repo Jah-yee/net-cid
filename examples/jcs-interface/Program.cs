@@ -68,7 +68,8 @@ foreach (var sample in new[] { "1.5", "0.1", "1e-7", "1e21", "5e-324", "33333333
 Console.WriteLine();
 
 // 6. Negative cases — JCS cannot represent NaN or ±infinity (they have no
-//    JSON syntax). JcsFormatException carries an actionable message.
+//    JSON syntax), and it rejects duplicate object member names (RFC 8785 builds on
+//    I-JSON / RFC 7493, which forbids them). JcsFormatException carries an actionable message.
 Console.WriteLine("== Negative cases ==");
 try
 {
@@ -86,4 +87,15 @@ try
 catch (JcsFormatException ex)
 {
     Console.WriteLine($"+infinity rejected:  {ex.Message}");
+}
+
+try
+{
+    // RFC 8785 / I-JSON (RFC 7493) forbid duplicate member names; JsonDocument would
+    // otherwise preserve both "a" members and produce ambiguous, non-canonical output.
+    JcsCanonicalizer.Canonicalize(JsonNode.Parse("{\"a\":1,\"a\":2}"));
+}
+catch (JcsFormatException ex)
+{
+    Console.WriteLine($"duplicate key rejected: {ex.Message}");
 }

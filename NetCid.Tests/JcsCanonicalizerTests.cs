@@ -518,4 +518,80 @@ public sealed class JcsCanonicalizerTests
         Assert.Equal((byte)'[', bytes[0]);
         Assert.Equal((byte)']', bytes[^1]);
     }
+
+    // --- Duplicate object member names (issue #17): RFC 8785 builds on I-JSON (RFC 7493 §2.3),
+    // which forbids duplicate names. JsonDocument preserves them, so both public surfaces must
+    // reject them with JcsFormatException rather than emit ambiguous, non-canonical output.
+
+    [Fact]
+    public void Duplicate_Keys_Throw_JcsFormatException()
+    {
+        // JsonElement overload: JsonDocument.Parse keeps both "a" members.
+        var ex = Assert.Throws<JcsFormatException>(() => CanonElement("{\"a\":1,\"a\":2}"));
+        Assert.Contains("Duplicate object member name 'a'", ex.Message);
+    }
+
+    [Fact]
+    public void Nested_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        var ex = Assert.Throws<JcsFormatException>(() => CanonElement("{\"x\":{\"a\":1,\"a\":2}}"));
+        Assert.Contains("Duplicate object member name 'a'", ex.Message);
+    }
+
+    [Fact]
+    public void Duplicate_Keys_In_Array_Element_Throw_JcsFormatException()
+    {
+        // Exercises the WriteArray -> WriteElement -> WriteObject recursion path.
+        Assert.Throws<JcsFormatException>(() => CanonElement("[{\"a\":1,\"a\":2}]"));
+    }
+
+    [Fact]
+    public void Triple_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        // Three identical names: confirms the adjacent-pair scan handles runs longer than two.
+        Assert.Throws<JcsFormatException>(() => CanonElement("{\"a\":1,\"a\":2,\"a\":3}"));
+    }
+
+    [Fact]
+    public void Distinct_Keys_With_Shared_Prefix_Do_Not_Throw()
+    {
+        // Guards against an over-eager check: "a" and "ab" sort adjacently but are not equal.
+        Assert.Equal("{\"a\":1,\"ab\":2}", CanonElement("{\"ab\":2,\"a\":1}"));
+        Assert.Equal("{\"a\":1,\"ab\":2}", Canon("{\"ab\":2,\"a\":1}"));
+    }
+
+    [Fact]
+    public void JsonNode_Overload_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        // JsonNode.Parse is lazy; the pre-walk enumerates the object, which makes the backing
+        // JsonObject throw ArgumentException on duplicates. Rather than translate that, the overload
+        // falls through to WriteObject, so the message names the offending key just like the
+        // JsonElement path.
+        var ex = Assert.Throws<JcsFormatException>(() => Canon("{\"a\":1,\"a\":2}"));
+        Assert.Contains("Duplicate object member name 'a'", ex.Message);
+    }
+
+    [Fact]
+    public void Both_Overloads_Report_Identical_Keyed_Duplicate_Message()
+    {
+        // WriteObject is the single source of the duplicate message, so the two surfaces agree
+        // byte-for-byte (diagnostic consistency — PR #38 review).
+        var fromElement = Assert.Throws<JcsFormatException>(() => CanonElement("{\"a\":1,\"a\":2}"));
+        var fromNode = Assert.Throws<JcsFormatException>(() => Canon("{\"a\":1,\"a\":2}"));
+        Assert.Equal(fromElement.Message, fromNode.Message);
+    }
+
+    [Fact]
+    public void JsonNode_Overload_Nested_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        Assert.Throws<JcsFormatException>(() => Canon("{\"x\":{\"a\":1,\"a\":2}}"));
+    }
+
+    [Fact]
+    public void IBufferWriter_Overload_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(
+            () => JcsCanonicalizer.Canonicalize(JsonNode.Parse("{\"a\":1,\"a\":2}"), sink));
+    }
 }
