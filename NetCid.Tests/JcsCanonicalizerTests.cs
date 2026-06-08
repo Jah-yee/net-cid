@@ -564,11 +564,21 @@ public sealed class JcsCanonicalizerTests
     public void JsonNode_Overload_Duplicate_Keys_Throw_JcsFormatException()
     {
         // JsonNode.Parse is lazy; the pre-walk enumerates the object, which makes the backing
-        // JsonObject throw ArgumentException on duplicates. We translate it to JcsFormatException
-        // (preserving the original as InnerException) so both overloads fail identically.
+        // JsonObject throw ArgumentException on duplicates. Rather than translate that, the overload
+        // falls through to WriteObject, so the message names the offending key just like the
+        // JsonElement path.
         var ex = Assert.Throws<JcsFormatException>(() => Canon("{\"a\":1,\"a\":2}"));
-        Assert.Contains("Duplicate object member name", ex.Message);
-        Assert.IsAssignableFrom<ArgumentException>(ex.InnerException);
+        Assert.Contains("Duplicate object member name 'a'", ex.Message);
+    }
+
+    [Fact]
+    public void Both_Overloads_Report_Identical_Keyed_Duplicate_Message()
+    {
+        // WriteObject is the single source of the duplicate message, so the two surfaces agree
+        // byte-for-byte (diagnostic consistency — PR #38 review).
+        var fromElement = Assert.Throws<JcsFormatException>(() => CanonElement("{\"a\":1,\"a\":2}"));
+        var fromNode = Assert.Throws<JcsFormatException>(() => Canon("{\"a\":1,\"a\":2}"));
+        Assert.Equal(fromElement.Message, fromNode.Message);
     }
 
     [Fact]

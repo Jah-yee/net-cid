@@ -174,16 +174,16 @@ public static class JcsCanonicalizer
         {
             ValidateNoUnrepresentableNumbers(node, 0);
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
             // A parsed JsonObject lazily builds its backing dictionary on first enumeration and
-            // rejects duplicate member names with an ArgumentException. That enumeration is the
-            // only ArgumentException source in the walk above — NaN/±infinity throw
-            // JcsFormatException, which is not an ArgumentException and so propagates untouched.
-            // Translate the duplicate into the JCS-specific exception so this overload fails the
-            // same way the JsonElement path does in WriteObject (RFC 8785 / RFC 7493).
-            throw new JcsFormatException(
-                "Duplicate object member name is not allowed (RFC 8785 / RFC 7493).", ex);
+            // rejects duplicate member names with an ArgumentException — the only ArgumentException
+            // source in the walk above (NaN/±infinity throw JcsFormatException, which is not an
+            // ArgumentException, so they propagate untouched). Don't translate it here: fall through
+            // to the serialize + WriteElement path below so WriteObject reports the duplicate with
+            // its precise, key-naming message — the single source of truth the JsonElement overload
+            // also uses. SerializeToDocument preserves duplicates, so the offending member is
+            // guaranteed to reach (and trip) WriteObject (RFC 8785 / RFC 7493).
         }
 
         JsonDocument document;
