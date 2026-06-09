@@ -109,16 +109,27 @@ public sealed class Cid : IEquatable<Cid>
     /// but writes canonical bytes directly into a pooled buffer to avoid an intermediate
     /// <c>byte[]</c> allocation.
     /// </summary>
+    /// <param name="json">The JSON value to canonicalize; a <see langword="null"/> reference is the literal <c>null</c>.</param>
+    /// <param name="codec">The multicodec content type of the canonical bytes. Defaults to <c>raw</c>.</param>
+    /// <param name="hashCode">The multihash hash function. Defaults to <c>sha2-256</c>.</param>
+    /// <param name="maxOutputBytes">
+    /// Maximum size, in bytes, of the canonical output. Defaults to
+    /// <see cref="JcsCanonicalizer.DefaultMaxOutputByteLength"/> (1 MiB); raise it (e.g.
+    /// <see cref="int.MaxValue"/>) when canonicalizing known-safe documents larger than that.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
     /// <exception cref="JcsFormatException">
-    /// The JSON value cannot be canonicalized — see <see cref="JcsCanonicalizer"/> for the v1 type scope.
+    /// The JSON value cannot be canonicalized — see <see cref="JcsCanonicalizer"/> for the v1
+    /// type scope — or its canonical form exceeds <paramref name="maxOutputBytes"/> bytes.
     /// </exception>
     public static Cid FromCanonicalJson(
         JsonNode? json,
         ulong codec = Multicodec.Raw,
-        ulong hashCode = MultihashCode.Sha2_256)
+        ulong hashCode = MultihashCode.Sha2_256,
+        int maxOutputBytes = JcsCanonicalizer.DefaultMaxOutputByteLength)
     {
         var writer = new ArrayBufferWriter<byte>();
-        JcsCanonicalizer.Canonicalize(json, writer);
+        JcsCanonicalizer.Canonicalize(json, writer, maxOutputBytes);
         return FromContent(writer.WrittenSpan, codec, hashCode);
     }
 

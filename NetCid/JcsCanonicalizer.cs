@@ -19,11 +19,60 @@ namespace NetCid;
 /// §6.1.6.1.20, as RFC 8785 §3.2.2.3 requires), <c>true</c>, <c>false</c>, and <c>null</c>.
 /// <c>NaN</c> and <c>±infinity</c> throw <see cref="JcsFormatException"/>.
 /// </para>
+/// <para>
+/// Strings (and object member names) must be well-formed UTF-16. An unpaired surrogate has no
+/// UTF-8 representation; rather than let <see cref="JsonSerializer"/> silently substitute U+FFFD
+/// — which would collapse two distinct malformed inputs to identical bytes — it throws
+/// <see cref="JcsFormatException"/>. Valid surrogate pairs and a legitimate U+FFFD are unaffected.
+/// This guard covers parsed input (<see cref="JsonElement"/>, <see cref="JsonNode.Parse(string,JsonNodeOptions?,JsonDocumentOptions)"/>)
+/// and <see cref="JsonValue"/> nodes built from <see langword="string"/> or <see langword="char"/>
+/// primitives. A <see cref="JsonValue"/> wrapping an arbitrary CLR object (e.g.
+/// <c>JsonValue.Create(someObject)</c>, a dictionary, or a collection) is expanded by
+/// <see cref="JsonSerializer"/>, which substitutes U+FFFD <em>before</em> this validation can
+/// inspect its members; when canonicalizing untrusted UTF-16, pass parsed JSON or primitive-built
+/// nodes rather than a node wrapping a raw CLR object.
+/// </para>
+/// <para>
+/// Object member names must be unique. RFC 8785 builds on I-JSON (RFC 7493 §2.3), which
+/// forbids duplicate member names; duplicates — which <see cref="JsonDocument"/> preserves —
+/// throw <see cref="JcsFormatException"/> rather than producing ambiguous, non-canonical
+/// output that two parsers could read differently (a signature-confusion vector).
+/// </para>
+/// <para>
+/// JSON nested deeper than 64 levels throws <see cref="JcsFormatException"/> rather than
+/// overflowing the stack. Because JCS processes untrusted credential JSON, the unbounded
+/// recursion that would otherwise occur is a denial-of-service vector: a
+/// <see cref="StackOverflowException"/> cannot be caught in .NET and terminates the process.
+/// </para>
 /// <para>Thread-safe — all members are static and stateless.</para>
 /// </remarks>
 public static class JcsCanonicalizer
 {
+    /// <summary>
+    /// Default maximum size, in bytes, of the canonical UTF-8 output. Canonicalization that
+    /// would produce more than this throws <see cref="JcsFormatException"/>. This is a
+    /// defense-in-depth bound for applications canonicalizing untrusted JSON, mirroring the
+    /// input limits on the CID/Multibase parse paths (<c>1 MiB</c>). Callers processing
+    /// known-safe, larger documents can raise it via the <c>maxOutputBytes</c> overloads.
+    /// </summary>
+    public const int DefaultMaxOutputByteLength = 1_048_576;
+
     private const int StackBufferThreshold = 256;
+
+    /// <summary>
+    /// Maximum JSON nesting depth accepted during canonicalization. Matches the default
+    /// <see cref="JsonSerializerOptions.MaxDepth"/> of 64. Input nested deeper than this
+    /// throws <see cref="JcsFormatException"/> instead of overflowing the stack.
+    /// </summary>
+    private const int MaxDepth = 64;
+
+    // Make our depth guard the single source of truth: validation already rejects anything
+    // past MaxDepth, so the serializer only ever sees depth ≤ MaxDepth. The +1 of headroom
+    // guarantees a value at exactly MaxDepth is never rejected by System.Text.Json's own
+    // default depth limit with a different (non-JcsFormatException) error. MaxDepth is the
+    // only changed option, so the produced document — and thus the canonical bytes — is
+    // identical to the default-options serialization.
+    private static readonly JsonSerializerOptions SerializeOptions = new() { MaxDepth = MaxDepth + 1 };
 
     /// <summary>
     /// Canonicalize <paramref name="node"/> per RFC 8785. A <see langword="null"/>
@@ -32,12 +81,28 @@ public static class JcsCanonicalizer
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="JcsFormatException">
     /// The node contains a value JCS cannot represent deterministically — <c>NaN</c>
-    /// or <c>±infinity</c>.
+    /// or <c>±infinity</c> — has duplicate object member names, nests deeper than the
+    /// supported limit of 64 levels, or
+    /// canonicalizes to more than <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonNode? node)
+        => Canonicalize(node, DefaultMaxOutputByteLength);
+
+    /// <summary>
+    /// Canonicalize <paramref name="node"/> per RFC 8785, rejecting output larger than
+    /// <paramref name="maxOutputBytes"/>.
+    /// </summary>
+    /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
+    /// <exception cref="JcsFormatException">
+    /// The node contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
+    /// <paramref name="maxOutputBytes"/> bytes.
+    /// </exception>
+    public static byte[] Canonicalize(JsonNode? node, int maxOutputBytes)
     {
         var writer = new ArrayBufferWriter<byte>();
-        Canonicalize(node, writer);
+        Canonicalize(node, writer, maxOutputBytes);
         return writer.WrittenSpan.ToArray();
     }
 
@@ -46,12 +111,44 @@ public static class JcsCanonicalizer
     /// </summary>
     /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
     /// <exception cref="JcsFormatException">
-    /// The element contains a value JCS cannot represent deterministically.
+    /// The element contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
+    /// <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static byte[] Canonicalize(JsonElement element)
+        => Canonicalize(element, DefaultMaxOutputByteLength);
+
+    /// <summary>
+    /// Canonicalize a <see cref="JsonElement"/> per RFC 8785, rejecting output larger than
+    /// <paramref name="maxOutputBytes"/>.
+    /// </summary>
+    /// <returns>UTF-8 encoded canonical JSON bytes.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
+    /// <exception cref="JcsFormatException">
+    /// The element contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
+    /// <paramref name="maxOutputBytes"/> bytes.
+    /// </exception>
+    public static byte[] Canonicalize(JsonElement element, int maxOutputBytes)
     {
+        ValidateOutputLimit(maxOutputBytes);
+
         var writer = new ArrayBufferWriter<byte>();
-        WriteElement(element, writer);
+        try
+        {
+            WriteElement(element, new LimitedBufferWriter(writer, maxOutputBytes), 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // A parsed string value or object member name holding an unpaired UTF-16 surrogate
+            // makes JsonElement.GetString()/JsonProperty.Name throw InvalidOperationException.
+            // Surface it as the uniform JcsFormatException; the local buffer is discarded, so no
+            // partial — and no silently U+FFFD-substituted — output escapes. (Duplicate-member and
+            // depth/output-limit errors throw JcsFormatException, not InvalidOperationException, so
+            // they propagate untouched.)
+            throw new JcsFormatException(UnpairedSurrogateMessage, ex);
+        }
+
         return writer.WrittenSpan.ToArray();
     }
 
@@ -62,27 +159,74 @@ public static class JcsCanonicalizer
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="destination"/> is <see langword="null"/>.</exception>
     /// <exception cref="JcsFormatException">
-    /// The node contains a value JCS cannot represent deterministically.
+    /// The node contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
+    /// <see cref="DefaultMaxOutputByteLength"/> bytes.
     /// </exception>
     public static void Canonicalize(JsonNode? node, IBufferWriter<byte> destination)
+        => Canonicalize(node, destination, DefaultMaxOutputByteLength);
+
+    /// <summary>
+    /// Canonicalize <paramref name="node"/> into <paramref name="destination"/>, rejecting
+    /// output larger than <paramref name="maxOutputBytes"/>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="destination"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputBytes"/> is less than 1.</exception>
+    /// <exception cref="JcsFormatException">
+    /// The node contains a value JCS cannot represent deterministically, has duplicate object member
+    /// names, nests deeper than the supported limit of 64 levels, or canonicalizes to more than
+    /// <paramref name="maxOutputBytes"/> bytes.
+    /// </exception>
+    public static void Canonicalize(JsonNode? node, IBufferWriter<byte> destination, int maxOutputBytes)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        ValidateOutputLimit(maxOutputBytes);
+
+        // Enforce the output cap at the single choke point through which every byte is
+        // committed; the wrapper throws before the byte that would cross the limit is counted.
+        var writer = new LimitedBufferWriter(destination, maxOutputBytes);
 
         if (node is null)
         {
-            WriteRaw(destination, "null"u8);
+            WriteRaw(writer, "null"u8);
             return;
         }
 
-        // JsonNode may wrap raw .NET doubles/floats holding NaN/±infinity. The default
-        // System.Text.Json serializer would throw a generic JsonException; surface a
-        // JCS-specific message instead so callers can handle JcsFormatException uniformly.
-        ValidateNoUnrepresentableNumbers(node);
+        // JsonNode may wrap raw .NET doubles/floats holding NaN/±infinity, or strings and member
+        // names containing unpaired UTF-16 surrogates. The default System.Text.Json serializer
+        // would silently rewrite a surrogate to U+FFFD (collapsing distinct malformed inputs to
+        // identical bytes) or throw a non-JCS exception; surface a JcsFormatException instead so
+        // callers can handle it uniformly. This walk runs first, so its depth guard protects the
+        // serialize step below from overflowing on a deeply nested node, and it inspects raw
+        // strings before serialization can mangle them.
+        try
+        {
+            ValidateNode(node, 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // A parsed JsonNode holding an element-backed unpaired surrogate makes the value/key
+            // accessors in the walk throw InvalidOperationException ("incomplete UTF-16"); convert
+            // it to the same JcsFormatException the raw-string check produces.
+            throw new JcsFormatException(UnpairedSurrogateMessage, ex);
+        }
+        catch (ArgumentException)
+        {
+            // A parsed JsonObject lazily builds its backing dictionary on first enumeration and
+            // rejects duplicate member names with an ArgumentException — the only ArgumentException
+            // source in the walk above (NaN/±infinity and unpaired surrogates throw JcsFormatException,
+            // which is not an ArgumentException, so they propagate untouched). Don't translate it here:
+            // fall through
+            // to the serialize + WriteElement path below so WriteObject reports the duplicate with
+            // its precise, key-naming message — the single source of truth the JsonElement overload
+            // also uses. SerializeToDocument preserves duplicates, so the offending member is
+            // guaranteed to reach (and trip) WriteObject (RFC 8785 / RFC 7493).
+        }
 
         JsonDocument document;
         try
         {
-            document = JsonSerializer.SerializeToDocument(node);
+            document = JsonSerializer.SerializeToDocument(node, SerializeOptions);
         }
         catch (JsonException ex)
         {
@@ -92,20 +236,69 @@ public static class JcsCanonicalizer
 
         using (document)
         {
-            WriteElement(document.RootElement, destination);
+            WriteElement(document.RootElement, writer, 0);
         }
     }
 
-    private static void ValidateNoUnrepresentableNumbers(JsonNode node)
+    private static void ValidateOutputLimit(int maxOutputBytes)
     {
+        if (maxOutputBytes < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxOutputBytes), maxOutputBytes, "Output size limit must be at least 1.");
+        }
+    }
+
+    private static void ThrowIfTooDeep(int depth)
+    {
+        if (depth > MaxDepth)
+        {
+            throw new JcsFormatException(
+                $"JSON nesting exceeds the canonicalization depth limit of {MaxDepth}.");
+        }
+    }
+
+    private const string UnpairedSurrogateMessage =
+        "JSON string contains invalid UTF-16 (unpaired surrogate); cannot canonicalize.";
+
+    // RFC 8785 §3.2.2.2 serializes strings as UTF-8. An unpaired UTF-16 surrogate has no UTF-8
+    // representation; System.Text.Json would silently substitute U+FFFD, so two distinct malformed
+    // inputs could collapse to identical canonical bytes (a collision / signature-confusion vector).
+    // Reject it instead. A valid surrogate PAIR (high followed by low) is left untouched, and a
+    // legitimately-supplied U+FFFD is not a surrogate, so it passes through unchanged.
+    private static void ThrowIfUnpairedSurrogate(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]))
+            {
+                if (i + 1 >= value.Length || !char.IsLowSurrogate(value[i + 1]))
+                {
+                    throw new JcsFormatException(UnpairedSurrogateMessage);
+                }
+
+                i++; // valid pair — skip the paired low surrogate
+            }
+            else if (char.IsLowSurrogate(value[i]))
+            {
+                throw new JcsFormatException(UnpairedSurrogateMessage);
+            }
+        }
+    }
+
+    private static void ValidateNode(JsonNode node, int depth)
+    {
+        ThrowIfTooDeep(depth);
+
         switch (node)
         {
             case JsonObject obj:
-                foreach (var (_, child) in obj)
+                foreach (var (key, child) in obj)
                 {
+                    ThrowIfUnpairedSurrogate(key);
                     if (child is not null)
                     {
-                        ValidateNoUnrepresentableNumbers(child);
+                        ValidateNode(child, depth + 1);
                     }
                 }
                 break;
@@ -115,7 +308,7 @@ public static class JcsCanonicalizer
                 {
                     if (item is not null)
                     {
-                        ValidateNoUnrepresentableNumbers(item);
+                        ValidateNode(item, depth + 1);
                     }
                 }
                 break;
@@ -151,19 +344,35 @@ public static class JcsCanonicalizer
                         throw new JcsFormatException("JCS cannot represent -infinity (RFC 8785 §3.2.2.3).");
                     }
                 }
+                else if (val.TryGetValue<string>(out var s) && s is not null)
+                {
+                    ThrowIfUnpairedSurrogate(s);
+                }
+                else if (val.TryGetValue<char>(out var ch) && char.IsSurrogate(ch))
+                {
+                    // A char-backed JsonValue (e.g. JsonValue.Create('\uD800')) serializes as a
+                    // one-code-unit JSON string. A single UTF-16 code unit can never form a
+                    // surrogate PAIR, so any surrogate char is unpaired and has no UTF-8
+                    // representation — reject it rather than let the serializer substitute U+FFFD.
+                    // (TryGetValue<string>/<double>/<float> all return false for a char-backed
+                    // value, so it reaches here; numbers and strings never match TryGetValue<char>.)
+                    throw new JcsFormatException(UnpairedSurrogateMessage);
+                }
                 break;
         }
     }
 
-    private static void WriteElement(JsonElement element, IBufferWriter<byte> writer)
+    private static void WriteElement(JsonElement element, IBufferWriter<byte> writer, int depth)
     {
+        ThrowIfTooDeep(depth);
+
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-                WriteObject(element, writer);
+                WriteObject(element, writer, depth);
                 break;
             case JsonValueKind.Array:
-                WriteArray(element, writer);
+                WriteArray(element, writer, depth);
                 break;
             case JsonValueKind.String:
                 WriteString(element.GetString()!, writer);
@@ -187,7 +396,7 @@ public static class JcsCanonicalizer
         }
     }
 
-    private static void WriteObject(JsonElement obj, IBufferWriter<byte> writer)
+    private static void WriteObject(JsonElement obj, IBufferWriter<byte> writer, int depth)
     {
         WriteByte(writer, (byte)'{');
 
@@ -201,6 +410,20 @@ public static class JcsCanonicalizer
 
         properties.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
 
+        // RFC 8785 builds on I-JSON (RFC 7493 §2.3), which forbids duplicate member names.
+        // JsonDocument.Parse preserves duplicates, so reject them rather than emit both: two
+        // members with the same name are non-canonical and let different parsers disagree on the
+        // authoritative value — a signature-confusion vector. After the ordinal sort above, any
+        // duplicate names are adjacent, so a single linear scan finds them.
+        for (var i = 1; i < properties.Count; i++)
+        {
+            if (string.Equals(properties[i].Name, properties[i - 1].Name, StringComparison.Ordinal))
+            {
+                throw new JcsFormatException(
+                    $"Duplicate object member name '{properties[i].Name}' is not allowed (RFC 8785 / RFC 7493).");
+            }
+        }
+
         for (var i = 0; i < properties.Count; i++)
         {
             if (i > 0)
@@ -210,13 +433,13 @@ public static class JcsCanonicalizer
 
             WriteString(properties[i].Name, writer);
             WriteByte(writer, (byte)':');
-            WriteElement(properties[i].Value, writer);
+            WriteElement(properties[i].Value, writer, depth + 1);
         }
 
         WriteByte(writer, (byte)'}');
     }
 
-    private static void WriteArray(JsonElement arr, IBufferWriter<byte> writer)
+    private static void WriteArray(JsonElement arr, IBufferWriter<byte> writer, int depth)
     {
         WriteByte(writer, (byte)'[');
 
@@ -229,7 +452,7 @@ public static class JcsCanonicalizer
             }
 
             first = false;
-            WriteElement(item, writer);
+            WriteElement(item, writer, depth + 1);
         }
 
         WriteByte(writer, (byte)']');
@@ -374,5 +597,35 @@ public static class JcsCanonicalizer
         }
 
         writer.Advance(ascii.Length);
+    }
+
+    /// <summary>
+    /// Forwards buffer requests to an inner writer while enforcing a maximum committed-byte
+    /// count. Because every byte the canonicalizer emits is committed through
+    /// <see cref="Advance"/>, this single choke point bounds the total output. The throw
+    /// happens <em>before</em> the crossing bytes are committed to the inner writer, so a
+    /// caller-supplied destination never receives more than the limit.
+    /// </summary>
+    private sealed class LimitedBufferWriter(IBufferWriter<byte> inner, int maxBytes) : IBufferWriter<byte>
+    {
+        private int _written;
+
+        public void Advance(int count)
+        {
+            // `maxBytes - _written` is the remaining budget (always >= 0, since we throw before
+            // exceeding it). Comparing this way avoids any int overflow on `_written + count`.
+            if (count > maxBytes - _written)
+            {
+                throw new JcsFormatException(
+                    $"Canonical output exceeds the limit of {maxBytes} bytes.");
+            }
+
+            _written += count;
+            inner.Advance(count);
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0) => inner.GetMemory(sizeHint);
+
+        public Span<byte> GetSpan(int sizeHint = 0) => inner.GetSpan(sizeHint);
     }
 }

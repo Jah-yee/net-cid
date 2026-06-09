@@ -33,16 +33,16 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
 
       - name: Restore conformance file from cache
         id: cache-conformance
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/es6testfile100m.txt.gz
           # Bump this key when CONFORMANCE_URL changes (re-publish would change content).
@@ -72,7 +72,7 @@ jobs:
           fi
 
       - name: Restore
-        run: dotnet restore NetCid.sln --tl:off
+        run: dotnet restore NetCid.sln --locked-mode --tl:off
 
       - name: Build
         run: dotnet build NetCid.sln -c Release --no-restore --tl:off

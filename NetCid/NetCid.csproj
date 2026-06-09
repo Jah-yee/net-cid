@@ -24,7 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="SimpleBase" Version="5.6.0" />
+    <PackageReference Include="SimpleBase" />
   </ItemGroup>
 
   <ItemGroup>

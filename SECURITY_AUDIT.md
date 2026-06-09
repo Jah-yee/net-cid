@@ -146,6 +146,7 @@ Reviewed:
 - Multibase strictness retained despite dependency swap:
   - base32 padding rejected
   - base32 trailing non-zero bits rejected
+  - base64url non-zero trailing bits rejected (validated by the `System.Buffers.Text.Base64Url` decoder, not a wrapper check; pinned by regression tests — issue #19)
   - base36 case-specific alphabets enforced
 - Cryptography:
   - hash generation uses `SHA256.HashData` and `SHA512.HashData`

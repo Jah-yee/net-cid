@@ -154,6 +154,124 @@ public sealed class JcsCanonicalizerTests
         Assert.Equal(new byte[] { 0x22, 0xF0, 0x9F, 0x98, 0x80, 0x22 }, bytes);
     }
 
+    // --- Invalid UTF-16 / unpaired surrogates (issue #18): an unpaired surrogate has no UTF-8
+    // representation. System.Text.Json would silently substitute U+FFFD, collapsing distinct
+    // malformed inputs to identical bytes (a collision / signature-confusion vector). Every public
+    // entry \u2014 string value or member name, JsonNode or JsonElement \u2014 must throw JcsFormatException
+    // instead, while valid surrogate PAIRS and a legitimate U+FFFD pass through unchanged.
+
+    [Fact]
+    public void Unpaired_High_Surrogate_Throws()
+    {
+        // JsonNode (raw .NET string) path. Pre-fix this produced the silent bytes 22 EF BF BD 22
+        // because SerializeToDocument rewrote U+D800 to U+FFFD upstream.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uD800")));
+    }
+
+    [Fact]
+    public void Unpaired_Low_Surrogate_Throws()
+    {
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uDC00")));
+    }
+
+    [Fact]
+    public void High_Surrogate_Followed_By_Non_Surrogate_Throws()
+    {
+        // A high surrogate must be followed by a low surrogate; a normal char after it is invalid.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uD800x")));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_In_Object_Key_Throws()
+    {
+        // Raw JsonObject member name (the issue omits keys, but they are strings too \u2014 pre-fix this
+        // silently produced {"<U+FFFD>":1}).
+        var obj = new JsonObject { ["\uD800"] = 1 };
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(obj));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_Nested_In_Array_Throws()
+    {
+        var node = new JsonArray("ok", JsonValue.Create("\uDC00"));
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(node));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_Via_JsonNode_Parse_Throws()
+    {
+        // Element-backed JsonValue (JsonNode.Parse). Pre-fix this threw a non-surrogate-specific
+        // exception; it must be a JcsFormatException with the UTF-16 message.
+        var ex = Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonNode.Parse("\"\\uD800\"")));
+        Assert.Contains("UTF-16", ex.Message);
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_JsonElement_Value_Throws()
+    {
+        // JsonElement path: element.GetString() throws InvalidOperationException \u2014 must be converted.
+        var ex = Assert.Throws<JcsFormatException>(() => CanonElement("\"\\uD800\""));
+        Assert.Contains("UTF-16", ex.Message);
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_JsonElement_Object_Key_Throws()
+    {
+        Assert.Throws<JcsFormatException>(() => CanonElement("{\"\\uD800\":1}"));
+    }
+
+    [Fact]
+    public void Unpaired_Surrogate_IBufferWriter_Overload_Throws()
+    {
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(
+            () => JcsCanonicalizer.Canonicalize(JsonValue.Create("\uD800"), sink));
+    }
+
+    [Theory]
+    [InlineData('\uD800')] // lone high surrogate
+    [InlineData('\uDC00')] // lone low surrogate
+    [InlineData('\uDFFF')]
+    public void Unpaired_Surrogate_Char_Backed_JsonValue_Throws(char surrogate)
+    {
+        // A char-backed JsonValue serializes as a one-code-unit string; a single UTF-16 unit can
+        // never be a valid pair, so any surrogate char is unpaired. Found by adversarial review:
+        // pre-fix this bypassed the string-only check and silently produced 22 EF BF BD 22.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create(surrogate)));
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonValue.Create((char?)surrogate)));
+        var obj = new JsonObject { ["v"] = JsonValue.Create(surrogate) };
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(obj));
+    }
+
+    [Fact]
+    public void Valid_Char_Backed_JsonValue_Is_Unchanged()
+    {
+        // Non-surrogate chars must still canonicalize as their one-char string form.
+        Assert.Equal(new byte[] { 0x22, 0x41, 0x22 }, JcsCanonicalizer.Canonicalize(JsonValue.Create('A')));
+        Assert.Equal(new byte[] { 0x22, 0xC3, 0xA9, 0x22 }, JcsCanonicalizer.Canonicalize(JsonValue.Create('é')));
+    }
+
+    [Fact]
+    public void Legitimate_Replacement_Char_U_FFFD_Still_Canonicalises()
+    {
+        // U+FFFD is a valid, assigned character (not a surrogate). It must NOT be rejected and must
+        // serialize to its UTF-8 bytes EF BF BD \u2014 guarding against over-rejection.
+        var expected = new byte[] { 0x22, 0xEF, 0xBF, 0xBD, 0x22 };
+        Assert.Equal(expected, JcsCanonicalizer.Canonicalize(JsonValue.Create("\uFFFD")));
+        using var doc = JsonDocument.Parse("\"\\uFFFD\"");
+        Assert.Equal(expected, JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
+    [Fact]
+    public void Valid_Surrogate_Pair_Via_JsonElement_Is_Unchanged()
+    {
+        // Regression for the JsonElement try/catch: a valid pair must still round-trip byte-for-byte.
+        using var doc = JsonDocument.Parse("\"\\uD83D\\uDE00\"");
+        Assert.Equal(
+            new byte[] { 0x22, 0xF0, 0x9F, 0x98, 0x80, 0x22 },
+            JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
     [Fact]
     public void Audit_Entry_Example_Matches_Expected_Canonical_Form()
     {
@@ -336,5 +454,262 @@ public sealed class JcsCanonicalizerTests
         var big = new string('a', 1024);
         var expected = "\"" + big + "\"";
         Assert.Equal(expected, Canon(JsonValue.Create(big)));
+    }
+
+    // --- Recursion-depth limit (issue #16): deep input must throw JcsFormatException,
+    // never an uncatchable StackOverflowException. The internal limit is 64 (matches
+    // System.Text.Json's default MaxDepth); it is private, so the literal is used here.
+
+    // Wrap a value in `depth` nested single-element arrays. Built programmatically so the
+    // test exercises the canonicalizer's own guards directly, independent of any parse-time
+    // MaxDepth behaviour. The innermost value then sits at nesting depth `depth`.
+    private static JsonNode NestArrays(int depth)
+    {
+        JsonNode node = JsonValue.Create(1);
+        for (var i = 0; i < depth; i++)
+        {
+            node = new JsonArray { node };
+        }
+
+        return node;
+    }
+
+    [Fact]
+    public void JsonNode_At_Depth_Limit_Canonicalises()
+    {
+        var expected = new string('[', 64) + "1" + new string(']', 64);
+        Assert.Equal(expected, Canon(NestArrays(64)));
+    }
+
+    [Fact]
+    public void JsonNode_Just_Over_Limit_Throws_JcsFormatException()
+    {
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(NestArrays(65)));
+    }
+
+    [Fact]
+    public void JsonNode_Far_Over_Limit_Throws_Without_StackOverflow()
+    {
+        // 100_000 deep: if the guard worked only after recursing the whole tree this would
+        // crash the test host. It must throw after ~65 frames instead.
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(NestArrays(100_000)));
+    }
+
+    [Fact]
+    public void JsonElement_At_Depth_Limit_Canonicalises()
+    {
+        var atLimit = new string('[', 64) + "1" + new string(']', 64);
+        using var doc = JsonDocument.Parse(atLimit, new JsonDocumentOptions { MaxDepth = 256 });
+        Assert.Equal(atLimit, Encoding.UTF8.GetString(JcsCanonicalizer.Canonicalize(doc.RootElement)));
+    }
+
+    [Fact]
+    public void JsonElement_Over_Limit_Throws_JcsFormatException()
+    {
+        // Just-over-limit boundary: verifies the depth-64 policy gate on the JsonElement path.
+        // (Depth 70 would NOT overflow the stack on its own — see the far-over test below for
+        // the actual no-crash proof.) Parse with headroom so the document itself builds; our
+        // guard (limit 64) is what rejects it.
+        var tooDeep = new string('[', 70) + "1" + new string(']', 70);
+        using var doc = JsonDocument.Parse(tooDeep, new JsonDocumentOptions { MaxDepth = 256 });
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
+    [Fact]
+    public void JsonElement_Far_Over_Limit_Throws_Without_StackOverflow()
+    {
+        // The JsonElement path (WriteElement -> WriteArray -> WriteElement) has no
+        // SerializeToDocument boundary and no parse-time guard, so before the fix it recursed
+        // unbounded and overflowed the stack in the low thousands of frames. 100_000 deep is
+        // well past that threshold: the depth-64 guard must throw JcsFormatException after ~65
+        // frames instead of terminating the process with an uncatchable StackOverflowException.
+        // Parse with no practical depth limit so the document builds and our guard is the gate.
+        var tooDeep = new string('[', 100_000) + "1" + new string(']', 100_000);
+        using var doc = JsonDocument.Parse(tooDeep, new JsonDocumentOptions { MaxDepth = int.MaxValue });
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement));
+    }
+
+    // --- Canonical-output-byte cap (issue #16, optional guard): bound the size of the
+    // produced output as defense-in-depth on untrusted JSON. "[1,2,3,4,5]" canonicalizes to
+    // exactly 11 bytes, which makes the byte boundaries easy to assert against an explicit limit.
+
+    [Fact]
+    public void Default_Output_Limit_Is_One_MiB()
+    {
+        Assert.Equal(1_048_576, JcsCanonicalizer.DefaultMaxOutputByteLength);
+    }
+
+    [Fact]
+    public void Output_At_Explicit_Limit_Canonicalises()
+    {
+        var node = JsonNode.Parse("[1,2,3,4,5]"); // 11 canonical bytes
+        Assert.Equal("[1,2,3,4,5]", Encoding.UTF8.GetString(JcsCanonicalizer.Canonicalize(node, maxOutputBytes: 11)));
+    }
+
+    [Fact]
+    public void Output_One_Byte_Over_Limit_Throws_JcsFormatException()
+    {
+        var node = JsonNode.Parse("[1,2,3,4,5]"); // needs 11 bytes; allow only 10
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(node, maxOutputBytes: 10));
+    }
+
+    [Fact]
+    public void JsonElement_Output_Over_Limit_Throws_JcsFormatException()
+    {
+        using var doc = JsonDocument.Parse("[1,2,3,4,5]");
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement, maxOutputBytes: 5));
+    }
+
+    [Fact]
+    public void IBufferWriter_Output_Over_Limit_Throws_Without_Exceeding_Limit()
+    {
+        var node = JsonNode.Parse("[1,2,3,4,5]");
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(node, sink, maxOutputBytes: 5));
+        // The crossing byte is rejected before it is committed, so the caller's writer never
+        // receives more than the limit.
+        Assert.True(sink.WrittenCount <= 5, $"committed {sink.WrittenCount} bytes, expected <= 5");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Output_Limit_Below_One_Throws_ArgumentOutOfRange(int limit)
+    {
+        var node = JsonNode.Parse("1");
+        Assert.Throws<ArgumentOutOfRangeException>(() => JcsCanonicalizer.Canonicalize(node, limit));
+        using var doc = JsonDocument.Parse("1");
+        Assert.Throws<ArgumentOutOfRangeException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement, limit));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => JcsCanonicalizer.Canonicalize(node, new ArrayBufferWriter<byte>(), limit));
+    }
+
+    // A flat (depth-1) array whose canonical form exceeds the 1 MiB default cap, so ONLY the
+    // output cap — never the depth guard — can reject it. 200_000 * "123456" ≈ 1.4 MiB.
+    private static string OverDefaultCapArrayJson()
+    {
+        var sb = new StringBuilder(1_500_000);
+        sb.Append('[');
+        for (var i = 0; i < 200_000; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append("123456");
+        }
+
+        sb.Append(']');
+        return sb.ToString();
+    }
+
+    [Fact]
+    public void Default_Cap_Triggers_On_Output_Over_One_MiB()
+    {
+        // The default-ON cap is the shipped breaking change, so pin it directly: a regression
+        // that delegated with int.MaxValue (disabling the default) would otherwise pass the suite.
+        var json = OverDefaultCapArrayJson();
+
+        var ex = Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonNode.Parse(json)));
+        Assert.Contains(
+            JcsCanonicalizer.DefaultMaxOutputByteLength.ToString(CultureInfo.InvariantCulture), ex.Message);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(doc.RootElement));
+
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(() => JcsCanonicalizer.Canonicalize(JsonNode.Parse(json), sink));
+        Assert.True(sink.WrittenCount <= JcsCanonicalizer.DefaultMaxOutputByteLength);
+    }
+
+    [Fact]
+    public void Output_Above_Default_Succeeds_When_Limit_Raised()
+    {
+        // The documented escape hatch: an explicit raised cap lets known-safe large output
+        // through. This also exercises the overflow-safe `count > maxBytes - _written`
+        // arithmetic in LimitedBufferWriter with a large _written and maxBytes = int.MaxValue.
+        var node = JsonNode.Parse(OverDefaultCapArrayJson());
+        var bytes = JcsCanonicalizer.Canonicalize(node, maxOutputBytes: int.MaxValue);
+
+        Assert.True(bytes.Length > JcsCanonicalizer.DefaultMaxOutputByteLength);
+        Assert.Equal((byte)'[', bytes[0]);
+        Assert.Equal((byte)']', bytes[^1]);
+    }
+
+    // --- Duplicate object member names (issue #17): RFC 8785 builds on I-JSON (RFC 7493 §2.3),
+    // which forbids duplicate names. JsonDocument preserves them, so both public surfaces must
+    // reject them with JcsFormatException rather than emit ambiguous, non-canonical output.
+
+    [Fact]
+    public void Duplicate_Keys_Throw_JcsFormatException()
+    {
+        // JsonElement overload: JsonDocument.Parse keeps both "a" members.
+        var ex = Assert.Throws<JcsFormatException>(() => CanonElement("{\"a\":1,\"a\":2}"));
+        Assert.Contains("Duplicate object member name 'a'", ex.Message);
+    }
+
+    [Fact]
+    public void Nested_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        var ex = Assert.Throws<JcsFormatException>(() => CanonElement("{\"x\":{\"a\":1,\"a\":2}}"));
+        Assert.Contains("Duplicate object member name 'a'", ex.Message);
+    }
+
+    [Fact]
+    public void Duplicate_Keys_In_Array_Element_Throw_JcsFormatException()
+    {
+        // Exercises the WriteArray -> WriteElement -> WriteObject recursion path.
+        Assert.Throws<JcsFormatException>(() => CanonElement("[{\"a\":1,\"a\":2}]"));
+    }
+
+    [Fact]
+    public void Triple_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        // Three identical names: confirms the adjacent-pair scan handles runs longer than two.
+        Assert.Throws<JcsFormatException>(() => CanonElement("{\"a\":1,\"a\":2,\"a\":3}"));
+    }
+
+    [Fact]
+    public void Distinct_Keys_With_Shared_Prefix_Do_Not_Throw()
+    {
+        // Guards against an over-eager check: "a" and "ab" sort adjacently but are not equal.
+        Assert.Equal("{\"a\":1,\"ab\":2}", CanonElement("{\"ab\":2,\"a\":1}"));
+        Assert.Equal("{\"a\":1,\"ab\":2}", Canon("{\"ab\":2,\"a\":1}"));
+    }
+
+    [Fact]
+    public void JsonNode_Overload_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        // JsonNode.Parse is lazy; the pre-walk enumerates the object, which makes the backing
+        // JsonObject throw ArgumentException on duplicates. Rather than translate that, the overload
+        // falls through to WriteObject, so the message names the offending key just like the
+        // JsonElement path.
+        var ex = Assert.Throws<JcsFormatException>(() => Canon("{\"a\":1,\"a\":2}"));
+        Assert.Contains("Duplicate object member name 'a'", ex.Message);
+    }
+
+    [Fact]
+    public void Both_Overloads_Report_Identical_Keyed_Duplicate_Message()
+    {
+        // WriteObject is the single source of the duplicate message, so the two surfaces agree
+        // byte-for-byte (diagnostic consistency — PR #38 review).
+        var fromElement = Assert.Throws<JcsFormatException>(() => CanonElement("{\"a\":1,\"a\":2}"));
+        var fromNode = Assert.Throws<JcsFormatException>(() => Canon("{\"a\":1,\"a\":2}"));
+        Assert.Equal(fromElement.Message, fromNode.Message);
+    }
+
+    [Fact]
+    public void JsonNode_Overload_Nested_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        Assert.Throws<JcsFormatException>(() => Canon("{\"x\":{\"a\":1,\"a\":2}}"));
+    }
+
+    [Fact]
+    public void IBufferWriter_Overload_Duplicate_Keys_Throw_JcsFormatException()
+    {
+        var sink = new ArrayBufferWriter<byte>();
+        Assert.Throws<JcsFormatException>(
+            () => JcsCanonicalizer.Canonicalize(JsonNode.Parse("{\"a\":1,\"a\":2}"), sink));
     }
 }

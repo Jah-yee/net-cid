@@ -16,15 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore NetCid.sln --tl:off
+        run: dotnet restore NetCid.sln --locked-mode --tl:off
 
       - name: Build
         run: dotnet build NetCid.sln -c Release --no-restore --tl:off
@@ -42,7 +42,7 @@ jobs:
         run: dotnet pack NetCid/NetCid.csproj -c Release --no-build -o artifacts --tl:off
 
       - name: Upload Package Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nupkg
           path: artifacts/*

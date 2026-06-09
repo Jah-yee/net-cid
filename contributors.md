@@ -44,6 +44,32 @@ dotnet run --project examples/multihash-interface/MultihashInterfaceExample.cspr
 dotnet run --project examples/block-interface/BlockInterfaceExample.csproj -c Release
 ```
 
+## Bumping NuGet package versions
+
+All package versions live in `Directory.Packages.props` (NuGet Central Package Management). Do not add `Version="..."` back onto `<PackageReference>` entries — that's an error under CPM.
+
+`RestoreLockedMode=true` is enabled globally, so a plain `dotnet restore` will FAIL with `NU1004` if any `Directory.Packages.props` version no longer matches the resolved entries in `packages.lock.json`. This is intentional: it forces lock-file regeneration to be an explicit, reviewable step.
+
+To bump a package version:
+
+1. Edit `Directory.Packages.props` and change the `Version` attribute on the relevant `<PackageVersion>` entry.
+2. Regenerate every project's lock file in one pass:
+   ```bash
+   dotnet restore NetCid.sln --force-evaluate
+   ```
+3. Inspect the diff across all 10 `packages.lock.json` files (library + 2 test projects + 7 examples). Surprising transitive additions or version flips deserve scrutiny.
+4. Commit `Directory.Packages.props` and all changed lock files together.
+
+If CI fails with `NU1004`, the lock files drifted from the props file — re-run `--force-evaluate` and commit the result.
+
+### Dependabot
+
+`.github/dependabot.yml` is configured to open weekly PRs against the NuGet ecosystem (and GitHub Actions versions). Test-tooling bumps (`xunit*`, `Microsoft.NET.Test.Sdk`, `coverlet.*`) are grouped into a single PR. Dependabot regenerates the affected lock files automatically.
+
+### Known review gap
+
+`actions/dependency-review-action@v4` does not parse `Directory.Packages.props` or `packages.lock.json` — its NuGet manifest list is limited to `.csproj`, `.nuspec`, and `packages.config`. Transitive dependency changes that surface only in `packages.lock.json` will land without dependency-review findings. Reviewers should diff lock files by eye on any version bump until GitHub's dependency graph adds CPM support.
+
 ## Engineering Standards
 
 - Follow existing style and naming conventions in `NetCid/`.
